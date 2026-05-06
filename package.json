@@ -60,6 +60,11 @@
         "to": "web/.next/standalone/web/.next/static"
       },
       {
+        "from": "web/.env.production",
+        "to": "web/.env.production",
+        "filter": ["**/*"]
+      },
+      {
         "from": "scripts",
         "to": "scripts"
       }
