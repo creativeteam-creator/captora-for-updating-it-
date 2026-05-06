@@ -22,9 +22,24 @@
 
 import { spawn, ChildProcess } from "child_process";
 import { mkdir, readFile } from "fs/promises";
-import { existsSync } from "fs";
+import { existsSync, appendFileSync, createWriteStream } from "fs";
 import { join } from "path";
 import { app } from "electron";
+
+/**
+ * Synchronous one-shot log line. Used for the diagnostic startup
+ * banner so it's guaranteed flushed to disk before anything else
+ * runs — async WriteStreams sometimes lose their initial writes if
+ * the process crashes shortly after.
+ */
+function logSync(message: string): void {
+  try {
+    const path = join(app.getPath("userData"), "captora.log");
+    appendFileSync(path, message);
+  } catch {
+    // userData may not be writable in weird sandbox configs — ignore
+  }
+}
 
 /**
  * Tiny .env parser — handles `KEY=VALUE` lines, ignores blanks/comments.
@@ -142,16 +157,20 @@ export async function startNextServer(): Promise<ServerInfo> {
   });
 
   // Mirror stdout/stderr to a log file in userData so users can hand
-  // us logs when something breaks (Windows GUI apps don't expose
-  // console output without launching from a terminal). Tailable
-  // location: %APPDATA%/Captora/captora.log
+  // us logs when something breaks. Sync writes for the startup banner
+  // (guaranteed flushed even if the process crashes seconds later);
+  // async WriteStream for the high-volume per-line piping.
+  // Location: %APPDATA%/Captora/captora.log
   const logPath = join(app.getPath("userData"), "captora.log");
-  const { createWriteStream } = await import("fs");
+  logSync(`\n--- Captora v${app.getVersion()} launched ${new Date().toISOString()} ---\n`);
+  logSync(`[nextServer] envFilePath=${envFilePath} fileEnvKeys=${fileEnvKeyCount}\n`);
+  logSync(`[nextServer] standaloneDir=${standaloneDir}\n`);
+  logSync(`[nextServer] serverScript=${serverScript}\n`);
+  logSync(`[nextServer] sessionsDir=${sessionsDir}\n`);
+  logSync(`[nextServer] rendersDir=${rendersDir}\n`);
+  logSync(`[nextServer] port=${port}\n`);
+
   const logStream = createWriteStream(logPath, { flags: "a" });
-  logStream.write(`\n--- Captora launched ${new Date().toISOString()} ---\n`);
-  logStream.write(
-    `[nextServer] envFilePath=${envFilePath} fileEnvKeys=${fileEnvKeyCount}\n`
-  );
 
   serverProcess.stdout?.on("data", (chunk: Buffer) => {
     process.stdout.write(`[next] ${chunk}`);
