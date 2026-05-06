@@ -1,6 +1,6 @@
 {
   "name": "captora",
-  "version": "1.0.11",
+  "version": "1.0.12",
   "private": true,
   "description": "Captora — viral-style auto-captions. Web app + Remotion renderer + Electron desktop wrapper.",
   "main": "electron/dist/main.js",
