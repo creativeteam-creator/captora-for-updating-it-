@@ -13,7 +13,7 @@ import {
   uploadRender,
 } from "@/lib/supabase/storage";
 import { downloadToFile } from "@/lib/supabase/storage-server";
-import { isDesktopMode, getLocalRendersDir } from "@/lib/captora-mode";
+import { isDesktopMode, getLocalRendersDir, getLocalSessionsDir } from "@/lib/captora-mode";
 
 export const runtime = "nodejs";
 // Renders involve bundling (~10–30s first call), Chromium boot, and
@@ -44,7 +44,19 @@ const COMPOSITION_BY_STYLE: Record<CaptionStyleId, string> = {
 
 const AUDIO_EXTS = new Set([".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac", ".opus", ".wma"]);
 
-const SESSION_DIR = join(tmpdir(), "captora-sessions");
+/**
+ * Working directory for cached source media. WEB mode lands downloads
+ * here from Supabase Storage; DESKTOP mode reads files written by the
+ * IPC helper at the same path. Both modes converge on a single
+ * "where to find/put the source bytes" so this route doesn't need to
+ * branch beyond reading the right folder.
+ */
+const WEB_SESSION_DIR = join(tmpdir(), "captora-sessions");
+function sessionDir(): string {
+  return isDesktopMode() && getLocalSessionsDir()
+    ? getLocalSessionsDir()
+    : WEB_SESSION_DIR;
+}
 const REMOTION_ROOT = resolve(process.cwd(), "..", "remotion");
 const REMOTION_ENTRY = join(REMOTION_ROOT, "src", "index.ts");
 
@@ -127,8 +139,19 @@ async function ensureLocalSource(
   ext: string,
   storagePath: string | null
 ): Promise<string> {
-  const cached = join(SESSION_DIR, `${projectId}${ext}`);
+  const cached = join(sessionDir(), `${projectId}${ext}`);
   if (existsSync(cached)) return cached;
+
+  // In desktop mode the file MUST exist locally (was written via IPC
+  // when the user dropped it into the editor). If it's missing here,
+  // either auto-cleanup (12h sweep) deleted it, or the project was
+  // synced from another machine. Tell the user to re-upload rather
+  // than silently failing on a Supabase round-trip that won't help.
+  if (isDesktopMode()) {
+    throw new Error(
+      `Source media missing locally for project ${projectId}. The 12-hour cleanup may have removed it — re-upload the original file to render again.`
+    );
+  }
 
   if (!storagePath) {
     throw new Error(
@@ -136,9 +159,10 @@ async function ensureLocalSource(
     );
   }
 
-  // Download from Supabase Storage. Path convention: <userId>/<projectId>.<ext>.
+  // Web mode: download from Supabase Storage. Path convention:
+  // <userId>/<projectId>.<ext>.
   void userId; // referenced in path RLS but not needed here.
-  await mkdir(SESSION_DIR, { recursive: true });
+  await mkdir(sessionDir(), { recursive: true });
   await downloadToFile(supabase, SOURCE_BUCKET, storagePath, cached);
   return cached;
 }

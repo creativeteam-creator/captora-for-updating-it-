@@ -23,6 +23,7 @@ import type { Database } from "./supabase/types";
 import type { CaptionStyleId, CaptionStyleOverrides } from "./styles";
 import type { WhisperResult } from "./whisper";
 import type { TranscribeProvider } from "./transcribe";
+import { isElectron } from "./electron-bridge";
 
 type ProjectRow = Database["public"]["Tables"]["projects"]["Row"];
 
@@ -284,9 +285,16 @@ async function rowToRecord(
 ): Promise<ProjectRecord> {
   // Resolve storage paths to time-limited signed URLs. Thumbnails fall
   // back to the data URL stored inline if no path was uploaded.
+  // Skip the source signedUrl in Electron desktop mode — the source
+  // file lives at `<userData>/sessions/...`, never gets uploaded to
+  // Supabase Storage, so a signed URL would 404 every time and just
+  // pollute the console with `Object not found` warnings.
+  const skipSourceSignedUrl = isElectron();
   const [thumbnailUrl, sourceUrl, renderUrl] = await Promise.all([
     resolveThumbnail(supabase, row.source_thumbnail),
-    row.source_path ? signedUrl(supabase, SOURCE_BUCKET, row.source_path) : Promise.resolve(null),
+    !skipSourceSignedUrl && row.source_path
+      ? signedUrl(supabase, SOURCE_BUCKET, row.source_path)
+      : Promise.resolve(null),
     row.render_url ? Promise.resolve(row.render_url) : Promise.resolve(null),
   ]);
 

@@ -160,8 +160,11 @@ export function EditorView({
         <LeftTab id="audio"    active={leftTab === "audio"}    onClick={() => setLeftTab("audio")}    icon="audio"   label="Audio" badge="Soon" />
       </div>
 
-      {/* Captions panel (changes with leftTab) */}
-      <div className="flex w-80 shrink-0 flex-col border-r border-[var(--border)] bg-[var(--bg-sidebar)]">
+      {/* Captions panel (changes with leftTab) — narrower on smaller
+          windows so the editor remains usable without maximizing.
+          Tailwind's responsive prefixes pick the bigger width once the
+          viewport actually has room. */}
+      <div className="flex w-60 shrink-0 flex-col border-r border-[var(--border)] bg-[var(--bg-sidebar)] xl:w-72 2xl:w-80">
         {leftTab === "captions" && (
           <CaptionsList
             words={words}
@@ -312,8 +315,11 @@ export function EditorView({
         )}
       </div>
 
-      {/* Right tabs */}
-      <div className="flex w-[340px] shrink-0 flex-col border-l border-[var(--border)] bg-[var(--bg-sidebar)]">
+      {/* Right tabs — same responsive scaling pattern as the left
+          captions panel. Default 280px works on 1366×768 laptops; the
+          Templates / Text panels expand on bigger screens for less
+          chip wrapping. */}
+      <div className="flex w-[280px] shrink-0 flex-col border-l border-[var(--border)] bg-[var(--bg-sidebar)] xl:w-[320px] 2xl:w-[360px]">
         <div className="flex border-b border-[var(--border)]">
           <RightTabButton active={rightTab === "text"}        label="Text"        onClick={() => setRightTab("text")} />
           <RightTabButton active={rightTab === "templates"}   label="Templates"   onClick={() => setRightTab("templates")} />
