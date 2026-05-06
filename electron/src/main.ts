@@ -20,6 +20,7 @@
  */
 
 import { app, BrowserWindow, ipcMain, dialog, shell } from "electron";
+import { writeFile, mkdir } from "fs/promises";
 import { join } from "path";
 import { startNextServer, stopNextServer } from "./nextServer";
 import { startTempCleanup } from "./tempCleanup";
@@ -122,6 +123,26 @@ ipcMain.handle("captora:pickMediaFile", async () => {
 ipcMain.handle("captora:revealInOSFileManager", async (_e, path: string) => {
   shell.showItemInFolder(path);
 });
+
+/**
+ * Persist a dropped source video / audio file to the local sessions
+ * folder, bypassing Supabase Storage entirely in desktop mode. Called
+ * by the renderer during the upload step. Returns the absolute on-disk
+ * path so the renderer can pass it through to /api/transcribe.
+ *
+ * Buffer is sent as a Uint8Array via IPC's structured clone (Electron
+ * handles large transfers natively without base64 overhead).
+ */
+ipcMain.handle(
+  "captora:saveSourceFile",
+  async (_e, payload: { bytes: Uint8Array; ext: string; projectId: string }) => {
+    const sessionsDir = join(app.getPath("userData"), "sessions");
+    await mkdir(sessionsDir, { recursive: true });
+    const filePath = join(sessionsDir, `${payload.projectId}${payload.ext}`);
+    await writeFile(filePath, Buffer.from(payload.bytes));
+    return filePath;
+  }
+);
 
 // ──────────────────────────────────────────────────────────────
 // App lifecycle

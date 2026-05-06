@@ -33,6 +33,7 @@ import {
 } from "@/lib/mediaDimensions";
 import { createClient } from "@/lib/supabase/client";
 import { uploadSourceFromBrowser } from "@/lib/supabase/storage";
+import { isElectron, saveSourceFileLocally } from "@/lib/electron-bridge";
 
 type Status =
   | { kind: "idle" }
@@ -264,13 +265,33 @@ export default function Home() {
       const userId = userRes?.user?.id;
       if (!userId) throw new Error("Not signed in");
       const projectId = crypto.randomUUID();
-      const storagePath = await uploadSourceFromBrowser(
-        supabase,
-        userId,
-        projectId,
-        ext,
-        file
-      );
+
+      // ──── Mode-aware "upload" ──────────────────────────────────
+      // Desktop (Electron): write the file to the local sessions
+      // folder via IPC. No Supabase Storage hit at all — videos
+      // never leave the user's PC. Returns the absolute on-disk
+      // path, which we send to /api/transcribe as `localPath` so
+      // the route knows to skip the Supabase download branch.
+      // Web: classic Supabase Storage upload, returns the storage
+      // path. /api/transcribe then downloads it server-side.
+      let storagePath: string;
+      if (isElectron()) {
+        await saveSourceFileLocally(file, ext, projectId);
+        // /api/transcribe still requires storagePath to satisfy its
+        // RLS path-prefix check. The file isn't actually in Supabase,
+        // but the path passes validation; the route then short-
+        // circuits the download because the file already exists on
+        // disk under the expected sessions/ name.
+        storagePath = `${userId}/${projectId}${ext}`;
+      } else {
+        storagePath = await uploadSourceFromBrowser(
+          supabase,
+          userId,
+          projectId,
+          ext,
+          file
+        );
+      }
 
       // Upload finished — flip to the transcribing state so the
       // status panel updates from "Uploading…" to "Transcribing…".

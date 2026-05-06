@@ -22,6 +22,17 @@ contextBridge.exposeInMainWorld("captora", {
   revealInOSFileManager: (path: string): Promise<void> =>
     ipcRenderer.invoke("captora:revealInOSFileManager", path),
 
+  /** Save a dropped File's bytes to the local sessions folder under
+   *  `<userData>/sessions/<projectId><ext>`. Returns the absolute
+   *  on-disk path. Lets the renderer skip the Supabase upload entirely
+   *  when running inside the Electron desktop wrapper. */
+  saveSourceFile: (
+    bytes: Uint8Array,
+    ext: string,
+    projectId: string
+  ): Promise<string> =>
+    ipcRenderer.invoke("captora:saveSourceFile", { bytes, ext, projectId }),
+
   /** Tells the renderer it's running inside the desktop wrapper —
    *  flips small UI bits (e.g. show "Open output folder" instead
    *  of "Download" after render). */
