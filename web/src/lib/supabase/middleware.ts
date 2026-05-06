@@ -38,50 +38,72 @@ function isPublicPath(pathname: string): boolean {
 
 
 export async function updateSession(request: NextRequest) {
+  // Defensive: if env vars aren't bundled correctly (Electron build with
+  // missing .env.production, or a misconfigured server), don't try to
+  // construct the Supabase client — that would throw mid-middleware and
+  // produce the dreaded ERR_HTTP_HEADERS_SENT cascade. Instead, let the
+  // request through; the page will then show its own error UI that the
+  // user can read.
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!url || !anonKey) {
+    console.error(
+      "[middleware] Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY — auth gate disabled"
+    );
+    return NextResponse.next({ request });
+  }
+
   let response = NextResponse.next({ request });
 
-  const supabase = createServerClient<Database>(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
+  try {
+    const supabase = createServerClient<Database>(url, anonKey, {
       cookies: {
         getAll() {
           return request.cookies.getAll();
         },
         setAll(cookiesToSet: CookieToSet[]) {
-          cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
+          cookiesToSet.forEach(({ name, value }) =>
+            request.cookies.set(name, value)
+          );
           response = NextResponse.next({ request });
           cookiesToSet.forEach(({ name, value, options }) =>
             response.cookies.set(name, value, options)
           );
         },
       },
+    });
+
+    // IMPORTANT: do NOT remove getUser() — it's what refreshes the cookies.
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    const pathname = request.nextUrl.pathname;
+    const isPublic = isPublicPath(pathname);
+
+    if (!user && !isPublic) {
+      // Anonymous → /login, with the original target as `next` so we can
+      // bounce them back after sign-in.
+      const redirectUrl = request.nextUrl.clone();
+      redirectUrl.pathname = "/login";
+      redirectUrl.searchParams.set("next", pathname);
+      return NextResponse.redirect(redirectUrl);
     }
-  );
 
-  // IMPORTANT: do NOT remove getUser() — it's what refreshes the cookies.
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+    if (user && (pathname === "/login" || pathname === "/signup")) {
+      // Already signed in → don't show the auth screens, send them home.
+      const redirectUrl = request.nextUrl.clone();
+      redirectUrl.pathname = "/";
+      return NextResponse.redirect(redirectUrl);
+    }
 
-  const pathname = request.nextUrl.pathname;
-  const isPublic = isPublicPath(pathname);
-
-  if (!user && !isPublic) {
-    // Anonymous → /login, with the original target as `next` so we can
-    // bounce them back after sign-in.
-    const url = request.nextUrl.clone();
-    url.pathname = "/login";
-    url.searchParams.set("next", pathname);
-    return NextResponse.redirect(url);
+    return response;
+  } catch (err) {
+    // Belt-and-suspenders — any unhandled error in the auth flow falls
+    // through to letting the page render its own state. Better than a
+    // 500 with ERR_HTTP_HEADERS_SENT that gives users no clue what's
+    // wrong.
+    console.error("[middleware] auth flow failed:", err);
+    return response;
   }
-
-  if (user && (pathname === "/login" || pathname === "/signup")) {
-    // Already signed in → don't show the auth screens, send them home.
-    const url = request.nextUrl.clone();
-    url.pathname = "/";
-    return NextResponse.redirect(url);
-  }
-
-  return response;
 }
