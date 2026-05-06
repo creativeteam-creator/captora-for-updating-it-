@@ -1,0 +1,19 @@
+{
+  "name": "@captora/electron",
+  "version": "1.0.0",
+  "description": "Captora desktop wrapper — Electron main process",
+  "private": true,
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json --watch"
+  },
+  "dependencies": {
+    "electron-updater": "^6.3.9"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "electron": "^32.2.7",
+    "typescript": "^5.6.3"
+  }
+}

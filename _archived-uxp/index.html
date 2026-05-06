@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Kalakar Auto Captions</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="root">
+      <div class="kalakar-panel">
+        <header class="panel-header">
+          <h1>Kalakar Auto Captions</h1>
+          <p>Viral-style captions for medical / tech videos</p>
+        </header>
+
+        <!-- Step 1: Audio file -->
+        <section class="upload-section">
+          <h2>Step 1 · Audio</h2>
+          <div class="file-input-wrapper">
+            <button id="btn-pick-audio" class="btn btn-primary">
+              Select Audio File
+            </button>
+            <span id="file-name" class="file-name" hidden></span>
+          </div>
+        </section>
+
+        <!-- Step 2: Style -->
+        <section class="style-section">
+          <h2>Step 2 · Style</h2>
+          <div class="style-grid" id="style-grid">
+            <div class="style-card selected" data-style="Bold Viral">
+              <div class="style-name">Bold Viral</div>
+              <div class="style-description">Yellow highlight · snappy pop-in</div>
+            </div>
+            <div class="style-card" data-style="Clean Medical">
+              <div class="style-name">Clean Medical</div>
+              <div class="style-description">Amber highlight · gentle pop-in</div>
+            </div>
+            <div class="style-card" data-style="Tech Minimal">
+              <div class="style-name">Tech Minimal</div>
+              <div class="style-description">Cyan highlight · medium pop-in</div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Step 3: Generate -->
+        <section class="action-section">
+          <h2>Step 3 · Generate Captions</h2>
+          <button id="btn-transcribe" class="btn btn-primary btn-large" disabled>
+            Upload &amp; Transcribe
+          </button>
+
+          <!-- Bypass the backend and feed a hardcoded Whisper JSON to main.js
+               so we can verify timeline insertion in isolation. -->
+          <button id="btn-mock" class="btn btn-secondary btn-large">
+            Test with Mock Captions
+          </button>
+
+          <!-- Diagnostic: dumps the Premiere UXP API surface to the DevTools
+               console without mutating anything. Use to learn the real method
+               names on a new Premiere build before fixing main.js. -->
+          <button id="btn-discover" class="btn btn-secondary btn-large">
+            Discover Premiere API
+          </button>
+
+          <button id="btn-n8n" class="btn btn-secondary" hidden>
+            Send to n8n
+          </button>
+        </section>
+
+        <!-- Status -->
+        <section class="status-section">
+          <div id="status" class="status-message"></div>
+          <div id="preview" class="transcription-preview" hidden>
+            <details open>
+              <summary>Last run details</summary>
+              <div id="preview-body" class="preview-content"></div>
+            </details>
+          </div>
+
+          <div id="api-dump-wrap" hidden style="margin-top:12px;">
+            <div style="font-size:12px; color:#d1d5db; margin-bottom:6px;">
+              API dump (select all, copy, paste back):
+            </div>
+            <textarea
+              id="api-dump"
+              readonly
+              style="width:100%; height:240px; background:#0f172a;
+                     color:#a7f3d0; border:1px solid #4b5563; border-radius:4px;
+                     padding:8px; font-family:Consolas,Monaco,monospace;
+                     font-size:11px; resize:vertical;"
+            ></textarea>
+          </div>
+        </section>
+
+        <footer class="panel-footer">
+          <p>Audio is transcribed via OpenAI Whisper through the local bridge.</p>
+          <p>n8n webhook hook ready for downstream automation.</p>
+        </footer>
+      </div>
+    </div>
+
+    <script src="panel.js"></script>
+  </body>
+</html>

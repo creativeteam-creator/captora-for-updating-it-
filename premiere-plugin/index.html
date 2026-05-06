@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Captora</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- Top bar — minimal native chrome above the embedded web app. Lets the
+       user reload, change URL, or jump out to a browser if Premiere's UXP
+       webview ever misbehaves. -->
+  <div id="bar">
+    <div id="brand">
+      <span>C<span class="accent">a</span>pt<span class="accent">o</span>ra</span>
+    </div>
+    <div id="actions">
+      <button type="button" id="btn-reload" title="Reload">↻</button>
+      <button type="button" id="btn-url" title="Server URL">URL</button>
+    </div>
+  </div>
+
+  <!-- The Captora web app loads inside this UXP webview. Cookies + session
+       storage persist for the panel session, so Supabase auth survives
+       across reloads of the panel. -->
+  <webview id="captora" src="http://localhost:3000" partition="persist:captora" allowpopups></webview>
+
+  <!-- Tiny URL prompt shown when the user clicks "URL" — lets them point
+       the panel at a different Captora server (LAN IP, hosted, etc.)
+       without re-installing the plugin. -->
+  <div id="url-prompt" hidden>
+    <div class="prompt">
+      <label>Captora server URL</label>
+      <input type="text" id="url-input" placeholder="http://192.168.1.7:3000" />
+      <div class="prompt-actions">
+        <button type="button" id="url-cancel">Cancel</button>
+        <button type="button" id="url-save">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="panel.js"></script>
+</body>
+</html>

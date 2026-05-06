@@ -1,0 +1,52 @@
+/*
+ * Curated Google Fonts catalogue — same set the Remotion FontLoader
+ * pulls in for renders, so editor preview ↔ MP4 export use identical
+ * glyphs. Imported via CSS to avoid pulling the @captora/remotion JS
+ * surface into Next.js Server Components (which would crash on
+ * `React.createContext` since Remotion needs a client context).
+ *
+ * Keep this in sync with `remotion/src/lib/fonts.ts` → GOOGLE_FONTS_URL.
+ */
+@import url("https://fonts.googleapis.com/css2?family=Anton&family=Bebas+Neue&family=Oswald:wght@400;500;600;700&family=Bowlby+One&family=Black+Ops+One&family=Russo+One&family=Archivo+Black&family=Inter:wght@400;500;600;700;800;900&family=Poppins:wght@400;500;600;700;800;900&family=Montserrat:wght@400;500;600;700;800;900&family=Roboto:wght@400;500;700;900&family=Open+Sans:wght@400;500;600;700;800&family=Nunito:wght@400;500;600;700;800;900&family=Work+Sans:wght@400;500;600;700;800;900&family=Playfair+Display:wght@400;600;700;800;900&family=Bodoni+Moda:wght@400;500;600;700;800;900&family=Caveat:wght@400;500;600;700&family=Dancing+Script:wght@400;500;600;700&family=Pacifico&family=Satisfy&family=Kalam:wght@300;400;700&family=JetBrains+Mono:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&family=Tiro+Devanagari+Hindi&family=Hind:wght@300;400;500;600;700&family=Mukta:wght@300;400;500;600;700;800&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Captora — dark + emerald palette */
+  --bg: #0a0e14;
+  --bg-sidebar: #0d1218;
+  --bg-elevated: #131a23;
+  --bg-hover: #1a222d;
+  --border: #1f2a37;
+  --border-strong: #2a3645;
+  --text: #e8edf2;
+  --text-muted: #8a96a8;
+  --accent: #10b981;
+  --accent-hover: #34d399;
+  --accent-bg: rgba(16, 185, 129, 0.1);
+}
+
+html,
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+/* Custom scrollbars to match the dark theme */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 5px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #3a4555;
+}
