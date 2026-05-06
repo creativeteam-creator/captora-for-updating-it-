@@ -3,6 +3,11 @@
   "version": "1.0.0",
   "private": true,
   "description": "Captora — viral-style auto-captions. Web app + Remotion renderer + Electron desktop wrapper.",
+  "main": "electron/dist/main.js",
+  "author": {
+    "name": "QHT Clinic",
+    "email": "creativeteam@qhtclinic.com"
+  },
   "workspaces": [
     "web",
     "remotion",
@@ -53,10 +58,6 @@
       {
         "from": "web/.next/static",
         "to": "web/.next/standalone/web/.next/static"
-      },
-      {
-        "from": "web/public",
-        "to": "web/.next/standalone/web/public"
       },
       {
         "from": "scripts",
