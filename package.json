@@ -28,6 +28,9 @@
     "icons": "node scripts/build-icons.js",
     "render": "npm --workspace remotion run render"
   },
+  "dependencies": {
+    "electron-updater": "^6.3.9"
+  },
   "devDependencies": {
     "concurrently": "^9.1.0",
     "cross-env": "^7.0.3",
