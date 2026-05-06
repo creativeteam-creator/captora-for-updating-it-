@@ -82,12 +82,41 @@ export async function saveSourceFileLocally(
   // exposed AND the File has a real on-disk origin.
   if (bridge.getFilePath && bridge.copySourceFile) {
     const systemPath = bridge.getFilePath(file);
+    console.log(
+      `[saveSourceFileLocally] getFilePath returned: ${systemPath ? `"${systemPath}"` : "(empty)"}`
+    );
     if (systemPath) {
-      return bridge.copySourceFile(systemPath, ext, projectId);
+      try {
+        const result = await bridge.copySourceFile(systemPath, ext, projectId);
+        console.log(`[saveSourceFileLocally] copy OK → ${result}`);
+        return result;
+      } catch (err) {
+        console.error("[saveSourceFileLocally] copySourceFile threw:", err);
+        throw err;
+      }
     }
+  } else {
+    console.warn(
+      "[saveSourceFileLocally] copy helpers missing — falling back to bytes IPC. " +
+        "(getFilePath: " +
+        (bridge.getFilePath ? "yes" : "no") +
+        ", copySourceFile: " +
+        (bridge.copySourceFile ? "yes" : "no") +
+        ")"
+    );
   }
 
   // Fallback: bytes through IPC. Slow / memory-heavy on big files.
+  console.log(
+    `[saveSourceFileLocally] using bytes-IPC fallback for ${file.name} (${file.size} bytes)`
+  );
   const bytes = new Uint8Array(await file.arrayBuffer());
-  return bridge.saveSourceFile(bytes, ext, projectId);
+  try {
+    const result = await bridge.saveSourceFile(bytes, ext, projectId);
+    console.log(`[saveSourceFileLocally] bytes write OK → ${result}`);
+    return result;
+  } catch (err) {
+    console.error("[saveSourceFileLocally] saveSourceFile threw:", err);
+    throw err;
+  }
 }

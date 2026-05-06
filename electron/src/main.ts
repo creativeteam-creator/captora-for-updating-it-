@@ -20,7 +20,8 @@
  */
 
 import { app, BrowserWindow, ipcMain, dialog, shell } from "electron";
-import { writeFile, mkdir, copyFile } from "fs/promises";
+import { writeFile, mkdir, copyFile, appendFile } from "fs/promises";
+import { existsSync, statSync } from "fs";
 import { join } from "path";
 import { startNextServer, stopNextServer } from "./nextServer";
 import { startTempCleanup } from "./tempCleanup";
@@ -125,6 +126,25 @@ ipcMain.handle("captora:revealInOSFileManager", async (_e, path: string) => {
 });
 
 /**
+ * Append a single line to captora.log with a timestamp. Used for IPC
+ * diagnostics so silent failures are no longer invisible. Sync write
+ * because we want the log on disk even if the process crashes
+ * immediately after.
+ */
+function ipcLog(message: string): void {
+  try {
+    const path = join(app.getPath("userData"), "captora.log");
+    appendFile(path, `[ipc ${new Date().toISOString()}] ${message}\n`).catch(
+      () => {
+        /* swallow — logging must never break the IPC */
+      }
+    );
+  } catch {
+    /* userData may not be writable in weird sandbox configs */
+  }
+}
+
+/**
  * Persist a dropped source video / audio file to the local sessions
  * folder, bypassing Supabase Storage entirely in desktop mode. Called
  * by the renderer during the upload step. Returns the absolute on-disk
@@ -133,22 +153,41 @@ ipcMain.handle("captora:revealInOSFileManager", async (_e, path: string) => {
  * BYTE PATH (saveSourceFile): renderer reads the File into an
  * ArrayBuffer and ships it through IPC's structured clone. Works for
  * any File, but reads the entire file into memory — a 30-min 1080p
- * source can hit 2-3 GB of RAM, OOM-ing the renderer (visible as
- * "black screen" while the renderer crashes silently).
+ * source can hit 2-3 GB of RAM, OOM-ing the renderer.
  *
  * PATH-COPY (copySourceFile): renderer only sends the source's on-
  * disk path; main does a filesystem-level copy. Constant-memory,
  * fast, handles arbitrary file sizes. Preferred whenever the source
  * came from drag-drop or the native file picker.
+ *
+ * Both handlers VERIFY the file exists after writing. If verification
+ * fails (silent corruption, permission issue, etc.) they throw so the
+ * renderer doesn't move on assuming success. Throws also get logged
+ * to captora.log so we can see what went wrong post-mortem.
  */
 ipcMain.handle(
   "captora:saveSourceFile",
   async (_e, payload: { bytes: Uint8Array; ext: string; projectId: string }) => {
     const sessionsDir = join(app.getPath("userData"), "sessions");
-    await mkdir(sessionsDir, { recursive: true });
     const filePath = join(sessionsDir, `${payload.projectId}${payload.ext}`);
-    await writeFile(filePath, Buffer.from(payload.bytes));
-    return filePath;
+    ipcLog(
+      `saveSourceFile entered projectId=${payload.projectId} ext=${payload.ext} bytes=${payload.bytes.byteLength} target=${filePath}`
+    );
+    try {
+      await mkdir(sessionsDir, { recursive: true });
+      await writeFile(filePath, Buffer.from(payload.bytes));
+      // Post-write verification — catches silent failures
+      if (!existsSync(filePath)) {
+        throw new Error(`writeFile reported success but file is missing: ${filePath}`);
+      }
+      const size = statSync(filePath).size;
+      ipcLog(`saveSourceFile OK size=${size} path=${filePath}`);
+      return filePath;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      ipcLog(`saveSourceFile FAILED ${msg}`);
+      throw err;
+    }
   }
 );
 
@@ -158,14 +197,34 @@ ipcMain.handle(
     _e,
     payload: { sourcePath: string; ext: string; projectId: string }
   ) => {
-    if (!payload.sourcePath) {
-      throw new Error("copySourceFile: empty sourcePath");
-    }
     const sessionsDir = join(app.getPath("userData"), "sessions");
-    await mkdir(sessionsDir, { recursive: true });
     const destPath = join(sessionsDir, `${payload.projectId}${payload.ext}`);
-    await copyFile(payload.sourcePath, destPath);
-    return destPath;
+    ipcLog(
+      `copySourceFile entered projectId=${payload.projectId} ext=${payload.ext} src="${payload.sourcePath}" target=${destPath}`
+    );
+    try {
+      if (!payload.sourcePath) {
+        throw new Error("copySourceFile: empty sourcePath (webUtils.getPathForFile returned blank)");
+      }
+      if (!existsSync(payload.sourcePath)) {
+        throw new Error(
+          `copySourceFile: source path does not exist on disk: ${payload.sourcePath}`
+        );
+      }
+      await mkdir(sessionsDir, { recursive: true });
+      await copyFile(payload.sourcePath, destPath);
+      // Post-copy verification — catches silent corruption
+      if (!existsSync(destPath)) {
+        throw new Error(`copyFile reported success but file is missing: ${destPath}`);
+      }
+      const size = statSync(destPath).size;
+      ipcLog(`copySourceFile OK size=${size} path=${destPath}`);
+      return destPath;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      ipcLog(`copySourceFile FAILED ${msg}`);
+      throw err;
+    }
   }
 );
 
