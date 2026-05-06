@@ -81,8 +81,12 @@ jobs:
           EOF
           echo "Wrote web/.env.production ($(wc -l < web/.env.production) lines)"
 
-      - name: Build (Next.js standalone + Electron + installer)
+      - name: Build (Next.js standalone + Electron + installer + publish)
         env:
+          # `GH_TOKEN` is what electron-builder's GitHub publisher reads.
+          # The default `GITHUB_TOKEN` provided by Actions has the `contents: write`
+          # permission set at the workflow level above, which is enough to
+          # upload release assets.
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Optional Apple signing — only used when these are set in repo secrets.
           # Without them, Mac builds use ad-hoc signing (free path).
@@ -91,4 +95,11 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-        run: npm run dist:${{ matrix.target }} -- --publish always
+        # `npm run release` runs build:all then `electron-builder --publish always`.
+        # The earlier workflow used `npm run dist:win -- --publish always` but
+        # npm's arg pass-through doesn't forward across `&&`-chained commands,
+        # so `--publish always` got eaten and electron-builder built installers
+        # without uploading them. `release` has `--publish always` baked in.
+        # No --win / --mac flag needed: electron-builder defaults to the current
+        # runner's platform, which is exactly what each matrix job wants.
+        run: npm run release
