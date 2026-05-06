@@ -48,7 +48,10 @@ jobs:
           cache: 'npm'
 
       - name: Install root + workspace deps
-        run: npm ci --workspaces --include-workspace-root
+        # `npm install` (not `npm ci`) on first builds — npm workspaces
+        # plus a fresh lockfile sometimes trip ci's strict checks. install
+        # is more forgiving and still uses the lockfile when it matches.
+        run: npm install --workspaces --include-workspace-root --no-audit --no-fund
 
       - name: Build (Next.js standalone + Electron + installer)
         env:

@@ -14,6 +14,12 @@ build/
 dist-electron/
 electron/dist/
 
+# Workspace nested lockfiles — npm workspaces only need ONE root lockfile;
+# nested ones confuse `npm ci --workspaces` in CI.
+electron/package-lock.json
+web/package-lock.json
+remotion/package-lock.json
+
 # Python virtual env (if user has one for the GPU scripts)
 .venv/
 __pycache__/
