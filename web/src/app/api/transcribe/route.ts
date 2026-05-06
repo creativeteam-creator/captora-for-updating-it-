@@ -153,19 +153,43 @@ export async function POST(req: NextRequest) {
       `[/api/transcribe] user=${user.id} file=${fileName} size=${fileSizeMB}MB spoken=${spokenLanguage} script=${writingScript} translate=${translateToEnglish} accuracy=${accuracy} storagePath=${storagePath}`
     );
 
-    // ───── Download from Supabase Storage to local tmp ─────
-    // Whisper needs a real file path (CTranslate2 / faster-whisper opens
-    // it via libsndfile), so we pull the bytes back from Storage. Yes,
-    // this means client → Storage → server → tmp; but it keeps the
-    // Next.js request body tiny and removes the gigabyte CRLF bug.
+    // ───── Locate / fetch the source file ─────
+    // Two paths converge here:
+    //   - WEB mode:  source was uploaded to Supabase Storage by the
+    //                browser; we download to tmp now.
+    //   - DESKTOP mode: source was written to <userData>/sessions/
+    //                by the Electron IPC bridge before this POST
+    //                fired; cloud download is never required (and
+    //                would always 404 because the source never went
+    //                to Supabase).
     await mkdir(sessionDir(), { recursive: true });
     const localPath = join(sessionDir(), `${projectId}${ext}`);
+    const localExists = existsSync(localPath);
+    console.log(
+      `[/api/transcribe] sessionDir=${sessionDir()} localPath=${localPath} exists=${localExists} desktopMode=${isDesktopMode()}`
+    );
     try {
-      // When the browser used the local-upload bypass (NEXT_PUBLIC_LOCAL_UPLOAD=true)
-      // the file is already sitting at localPath — skip the Supabase download.
-      if (existsSync(localPath)) {
+      if (localExists) {
         console.log(`[/api/transcribe] using cached local file: ${localPath}`);
+      } else if (isDesktopMode()) {
+        // Hard guard — desktop mode ALWAYS expects the file locally.
+        // If it's missing, the IPC bridge failed before the POST or
+        // the user reopened a project whose source got auto-cleaned
+        // after 12h. Either way, falling through to Supabase is wrong
+        // (the file isn't there) — surface a clear error instead.
+        return NextResponse.json(
+          {
+            ok: false,
+            error:
+              `Source file not found at ${localPath}. ` +
+              `The 12-hour cleanup may have removed it, or the upload IPC failed. ` +
+              `Re-drop the original file to retry.`,
+          },
+          { status: 500 }
+        );
       } else {
+        // WEB mode: download from Supabase Storage. This is the
+        // legitimate cloud path used by the VPS deploy.
         await downloadToFile(supabase, SOURCE_BUCKET, storagePath, localPath);
       }
     } catch (err) {
