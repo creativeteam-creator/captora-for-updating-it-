@@ -9,9 +9,15 @@
  * "just work" — `auth.uid()` in policies maps to the logged-in user.
  */
 
-import { createServerClient } from "@supabase/ssr";
+import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import type { Database } from "./types";
+
+interface CookieToSet {
+  name: string;
+  value: string;
+  options?: CookieOptions;
+}
 
 export async function createClient() {
   const cookieStore = await cookies();
@@ -24,7 +30,7 @@ export async function createClient() {
         getAll() {
           return cookieStore.getAll();
         },
-        setAll(cookiesToSet) {
+        setAll(cookiesToSet: CookieToSet[]) {
           try {
             cookiesToSet.forEach(({ name, value, options }) =>
               cookieStore.set(name, value, options)
@@ -49,11 +55,15 @@ export function createServiceClient() {
   // Lazy import the JS-only SDK because it doesn't need cookie handling.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { createClient: createJsClient } = require("@supabase/supabase-js");
-  return createJsClient<Database>(
+  // The JS SDK's generic typing has shifted across versions and currently
+  // doesn't accept the `Database` type at this call site. Cast here keeps
+  // build green; runtime shape is identical.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (createJsClient as any)(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
     {
       auth: { autoRefreshToken: false, persistSession: false },
     }
-  );
+  ) as ReturnType<typeof createServerClient<Database>>;
 }

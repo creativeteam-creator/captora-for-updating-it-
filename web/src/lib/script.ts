@@ -236,8 +236,7 @@ export function polishRomanHindi(text: string): string {
     // These are the most common romanisation artefacts seen in captions.
     // Conjunctions / connectors
     "kyonki":       "kyunki",   // क्योंकि
-    "isliye":       "isliye",
-    "isiliye":      "isliye",
+    // isliye / isiliye already mapped above (duplicate-safe)
     "aba":          "ab",       // अब  (optitrans adds trailing schwa)
     "taba":         "tab",      // तब
     "kaba":         "kab",      // कब
@@ -253,7 +252,6 @@ export function polishRomanHindi(text: string): string {
     "inhonne":      "unhone",   // इन्होंने → unhone
     "unhonne":      "unhone",
     "karavaya":     "karwaya",  // करवाया
-    "karavaya":     "karwaya",
     "karavane":     "karvaane", // करवाने
     "karana":       "karna",    // करना  (caught by -ana rule but fallback)
     "karate":       "karte",    // करते  (careful: English "karate" stays — but Hinglish context ok)
@@ -328,7 +326,7 @@ export function polishRomanHindi(text: string): string {
     "ganjapana":    "ganjapan", // गंजापन
     "mahine":       "mahine",   // already correct, keep
     "samay":        "samay",
-    "pahale":       "pehle",
+    // pahale already mapped above
     "chehara":      "chehra",   // चेहरा
     "chehra":       "chehra",
     "tampal":       "temple",   // temples → stay as English
