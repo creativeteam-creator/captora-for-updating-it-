@@ -80,6 +80,12 @@ async function createWindow(): Promise<void> {
 
   mainWindow.once("ready-to-show", () => {
     mainWindow?.show();
+    // Open DevTools in production too — early-version users will hit
+    // bugs and we want them to be able to right-click → Inspect to
+    // see the actual error. Toggle off later when stable.
+    if (process.env.CAPTORA_OPEN_DEVTOOLS !== "0") {
+      mainWindow?.webContents.openDevTools({ mode: "detach" });
+    }
   });
 
   mainWindow.on("closed", () => {

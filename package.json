@@ -64,10 +64,7 @@
       },
       {
         "from": "web/.env.production",
-        "to": "web/.env.production",
-        "filter": [
-          "**/*"
-        ]
+        "to": "web/.env.production"
       },
       {
         "from": "scripts",

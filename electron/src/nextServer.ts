@@ -141,11 +141,25 @@ export async function startNextServer(): Promise<ServerInfo> {
     stdio: ["ignore", "pipe", "pipe"],
   });
 
+  // Mirror stdout/stderr to a log file in userData so users can hand
+  // us logs when something breaks (Windows GUI apps don't expose
+  // console output without launching from a terminal). Tailable
+  // location: %APPDATA%/Captora/captora.log
+  const logPath = join(app.getPath("userData"), "captora.log");
+  const { createWriteStream } = await import("fs");
+  const logStream = createWriteStream(logPath, { flags: "a" });
+  logStream.write(`\n--- Captora launched ${new Date().toISOString()} ---\n`);
+  logStream.write(
+    `[nextServer] envFilePath=${envFilePath} fileEnvKeys=${fileEnvKeyCount}\n`
+  );
+
   serverProcess.stdout?.on("data", (chunk: Buffer) => {
     process.stdout.write(`[next] ${chunk}`);
+    logStream.write(`[next] ${chunk}`);
   });
   serverProcess.stderr?.on("data", (chunk: Buffer) => {
     process.stderr.write(`[next-err] ${chunk}`);
+    logStream.write(`[next-err] ${chunk}`);
   });
 
   // Wait for the "Ready" line on stdout — Next.js prints it once it's
