@@ -9,7 +9,7 @@
  * tray, drag-and-drop registration).
  */
 
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
 
 contextBridge.exposeInMainWorld("captora", {
   /** Opens the native OS file dialog. Returns the absolute path of
@@ -24,14 +24,43 @@ contextBridge.exposeInMainWorld("captora", {
 
   /** Save a dropped File's bytes to the local sessions folder under
    *  `<userData>/sessions/<projectId><ext>`. Returns the absolute
-   *  on-disk path. Lets the renderer skip the Supabase upload entirely
-   *  when running inside the Electron desktop wrapper. */
+   *  on-disk path. Slow + memory-heavy on large files because the
+   *  whole buffer goes through IPC; prefer `getFilePath` +
+   *  `copySourceFile` whenever possible. */
   saveSourceFile: (
     bytes: Uint8Array,
     ext: string,
     projectId: string
   ): Promise<string> =>
     ipcRenderer.invoke("captora:saveSourceFile", { bytes, ext, projectId }),
+
+  /** Resolve the system path of a dragged-or-picked File. Available
+   *  for files that came from the user's filesystem (drag-drop, file
+   *  picker). Returns "" for synthetic Files (created in JS, no
+   *  on-disk origin). Lets us skip ArrayBuffer reads on multi-GB
+   *  videos — instead we just hand the path to `copySourceFile`. */
+  getFilePath: (file: File): string => {
+    try {
+      return webUtils.getPathForFile(file);
+    } catch {
+      return "";
+    }
+  },
+
+  /** Copy a file from `sourcePath` (on the user's disk anywhere) into
+   *  `<userData>/sessions/<projectId><ext>`. Returns the destination
+   *  path. Disk-to-disk copy — no buffering, handles arbitrary file
+   *  sizes (3 GB, 10 GB, doesn't matter). */
+  copySourceFile: (
+    sourcePath: string,
+    ext: string,
+    projectId: string
+  ): Promise<string> =>
+    ipcRenderer.invoke("captora:copySourceFile", {
+      sourcePath,
+      ext,
+      projectId,
+    }),
 
   /** Tells the renderer it's running inside the desktop wrapper —
    *  flips small UI bits (e.g. show "Open output folder" instead

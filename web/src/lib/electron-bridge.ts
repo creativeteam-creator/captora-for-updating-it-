@@ -17,6 +17,17 @@ interface CaptoraBridge {
     ext: string,
     projectId: string
   ) => Promise<string>;
+  /** Resolves the system path of a dropped File. Returns "" for
+   *  Files that don't have an on-disk origin (very rare for drag-
+   *  drop / file picker). */
+  getFilePath?: (file: File) => string;
+  /** Disk-to-disk copy from the source path into the local sessions
+   *  folder. Constant memory, handles any file size. */
+  copySourceFile?: (
+    sourcePath: string,
+    ext: string,
+    projectId: string
+  ) => Promise<string>;
   isDesktop: true;
 }
 
@@ -36,9 +47,21 @@ export function getBridge(): CaptoraBridge | null {
 }
 
 /**
- * Save a dropped File to the local sessions folder via IPC. Reads the
- * file as ArrayBuffer client-side, ships it to the Electron main process
- * which writes it to disk. Returns the absolute path on-disk.
+ * Save a dropped File to the local sessions folder. Picks the best
+ * strategy based on what the bridge exposes:
+ *
+ *   1. **Path copy (preferred):** if the File has an on-disk origin
+ *      (drag-drop or file picker — almost always), we resolve its
+ *      system path via `webUtils.getPathForFile` in preload, then
+ *      ask main to do a disk-to-disk copy. Constant-memory, handles
+ *      30-min 1080p videos / 5 GB clips without breaking a sweat.
+ *
+ *   2. **Bytes IPC (fallback):** for synthetic Files without an
+ *      on-disk origin (very rare), read the whole File as
+ *      ArrayBuffer and ship through IPC. Memory-heavy — a 30-min
+ *      video can OOM the renderer, showing a black screen while it
+ *      crashes silently. We only take this path when no other
+ *      option exists.
  *
  * Throws if not running inside Electron — caller should branch on
  * `isElectron()` first.
@@ -54,8 +77,17 @@ export async function saveSourceFileLocally(
       "saveSourceFileLocally called outside Electron desktop wrapper"
     );
   }
-  // Use Uint8Array for efficient IPC transfer — Electron's structured
-  // clone moves the buffer's underlying memory rather than copying.
+
+  // Preferred: path copy. Only available when both helpers are
+  // exposed AND the File has a real on-disk origin.
+  if (bridge.getFilePath && bridge.copySourceFile) {
+    const systemPath = bridge.getFilePath(file);
+    if (systemPath) {
+      return bridge.copySourceFile(systemPath, ext, projectId);
+    }
+  }
+
+  // Fallback: bytes through IPC. Slow / memory-heavy on big files.
   const bytes = new Uint8Array(await file.arrayBuffer());
   return bridge.saveSourceFile(bytes, ext, projectId);
 }

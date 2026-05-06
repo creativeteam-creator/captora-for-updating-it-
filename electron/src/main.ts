@@ -20,7 +20,7 @@
  */
 
 import { app, BrowserWindow, ipcMain, dialog, shell } from "electron";
-import { writeFile, mkdir } from "fs/promises";
+import { writeFile, mkdir, copyFile } from "fs/promises";
 import { join } from "path";
 import { startNextServer, stopNextServer } from "./nextServer";
 import { startTempCleanup } from "./tempCleanup";
@@ -130,8 +130,16 @@ ipcMain.handle("captora:revealInOSFileManager", async (_e, path: string) => {
  * by the renderer during the upload step. Returns the absolute on-disk
  * path so the renderer can pass it through to /api/transcribe.
  *
- * Buffer is sent as a Uint8Array via IPC's structured clone (Electron
- * handles large transfers natively without base64 overhead).
+ * BYTE PATH (saveSourceFile): renderer reads the File into an
+ * ArrayBuffer and ships it through IPC's structured clone. Works for
+ * any File, but reads the entire file into memory — a 30-min 1080p
+ * source can hit 2-3 GB of RAM, OOM-ing the renderer (visible as
+ * "black screen" while the renderer crashes silently).
+ *
+ * PATH-COPY (copySourceFile): renderer only sends the source's on-
+ * disk path; main does a filesystem-level copy. Constant-memory,
+ * fast, handles arbitrary file sizes. Preferred whenever the source
+ * came from drag-drop or the native file picker.
  */
 ipcMain.handle(
   "captora:saveSourceFile",
@@ -141,6 +149,23 @@ ipcMain.handle(
     const filePath = join(sessionsDir, `${payload.projectId}${payload.ext}`);
     await writeFile(filePath, Buffer.from(payload.bytes));
     return filePath;
+  }
+);
+
+ipcMain.handle(
+  "captora:copySourceFile",
+  async (
+    _e,
+    payload: { sourcePath: string; ext: string; projectId: string }
+  ) => {
+    if (!payload.sourcePath) {
+      throw new Error("copySourceFile: empty sourcePath");
+    }
+    const sessionsDir = join(app.getPath("userData"), "sessions");
+    await mkdir(sessionsDir, { recursive: true });
+    const destPath = join(sessionsDir, `${payload.projectId}${payload.ext}`);
+    await copyFile(payload.sourcePath, destPath);
+    return destPath;
   }
 );
 
