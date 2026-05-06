@@ -53,6 +53,38 @@ jobs:
         # is more forgiving and still uses the lockfile when it matches.
         run: npm install --workspaces --include-workspace-root --no-audit --no-fund
 
+      - name: Validate required secrets
+        # Fails the build EARLY if any required secret is missing or
+        # empty. Without this, the build proceeds with empty NEXT_PUBLIC_*
+        # vars, and the client bundle ends up calling Supabase with
+        # `undefined` URL — the error only surfaces in the user's
+        # browser at runtime ("Your project's URL and API key are
+        # required"). Loud failure here saves hours of debugging.
+        shell: bash
+        env:
+          PROD_SUPABASE_URL: ${{ secrets.PROD_SUPABASE_URL }}
+          PROD_SUPABASE_ANON_KEY: ${{ secrets.PROD_SUPABASE_ANON_KEY }}
+          PROD_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.PROD_SUPABASE_SERVICE_ROLE_KEY }}
+          PROD_GROQ_API_KEY: ${{ secrets.PROD_GROQ_API_KEY }}
+        run: |
+          missing=()
+          [ -z "$PROD_SUPABASE_URL" ] && missing+=("PROD_SUPABASE_URL")
+          [ -z "$PROD_SUPABASE_ANON_KEY" ] && missing+=("PROD_SUPABASE_ANON_KEY")
+          [ -z "$PROD_SUPABASE_SERVICE_ROLE_KEY" ] && missing+=("PROD_SUPABASE_SERVICE_ROLE_KEY")
+          [ -z "$PROD_GROQ_API_KEY" ] && missing+=("PROD_GROQ_API_KEY")
+          if [ ${#missing[@]} -ne 0 ]; then
+            echo "::error::Missing or empty secret(s): ${missing[*]}"
+            echo "Add them at: https://github.com/${{ github.repository }}/settings/secrets/actions"
+            exit 1
+          fi
+          # Print lengths (not values) so we can confirm secrets ARE
+          # populated without leaking them into the public log.
+          echo "Secret lengths (chars):"
+          echo "  PROD_SUPABASE_URL              = ${#PROD_SUPABASE_URL}"
+          echo "  PROD_SUPABASE_ANON_KEY         = ${#PROD_SUPABASE_ANON_KEY}"
+          echo "  PROD_SUPABASE_SERVICE_ROLE_KEY = ${#PROD_SUPABASE_SERVICE_ROLE_KEY}"
+          echo "  PROD_GROQ_API_KEY              = ${#PROD_GROQ_API_KEY}"
+
       - name: Generate production env from GitHub Secrets
         # Writes web/.env.production using values stored as GitHub repo
         # secrets (Settings → Secrets and variables → Actions). The file
