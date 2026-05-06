@@ -124,6 +124,12 @@ export async function startNextServer(): Promise<ServerInfo> {
       // below so a value in the env file can't accidentally override
       // CAPTORA_MODE / paths.
       ...fileEnv,
+      // CRITICAL: tells Electron to run as Node.js when invoked with a
+      // script arg. Without this, `process.execPath` (which is the
+      // Electron binary inside the packaged app) tries to launch as a
+      // normal Electron app and exits with code 0 — leaving the user
+      // staring at "Next.js exited early with code 0".
+      ELECTRON_RUN_AS_NODE: "1",
       NODE_ENV: "production",
       PORT: String(port),
       HOSTNAME: "127.0.0.1",
