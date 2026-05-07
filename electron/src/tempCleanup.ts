@@ -38,10 +38,25 @@ async function sweep(maxAgeMs: number): Promise<void> {
     const fullPath = join(dir, name);
     try {
       const s = await stat(fullPath);
-      if (now - s.mtimeMs > maxAgeMs) {
+      // Use the NEWEST of mtime / ctime / birthtime to decide age.
+      // mtime alone is unreliable because Node's copyFile preserves
+      // the source's mtime — a freshly-copied file from an old source
+      // would otherwise get deleted on the very first sweep. Looking
+      // at MAX(mtime, ctime, birthtime) catches the actual moment the
+      // file appeared on this disk regardless of where it came from.
+      const newest = Math.max(
+        s.mtimeMs,
+        s.ctimeMs,
+        s.birthtimeMs || 0
+      );
+      const ageMs = now - newest;
+      if (ageMs > maxAgeMs) {
         bytesFreed += s.size;
         await unlink(fullPath);
         removed++;
+        console.log(
+          `[tempCleanup] removed ${name} (age ${(ageMs / 3600_000).toFixed(1)}h, ${(s.size / 1024 / 1024).toFixed(1)} MB)`
+        );
       }
     } catch {
       // File may have vanished mid-sweep; ignore
@@ -59,10 +74,17 @@ async function sweep(maxAgeMs: number): Promise<void> {
  * (main.ts) can clear it on app quit.
  */
 export function startTempCleanup(maxAgeMs = TWELVE_HOURS_MS): () => void {
-  // Initial sweep — catches files left over from previous run
-  sweep(maxAgeMs).catch((err) => {
-    console.warn("[tempCleanup] initial sweep failed:", err);
-  });
+  // Initial sweep is delayed 30s. Reason: a user who launches the
+  // app and IMMEDIATELY drops a video could otherwise race the
+  // initial sweep — file gets copied, sweep fires, file (with
+  // possibly old inherited mtime, even with our utimes touch) gets
+  // unlinked before /api/transcribe reads it. Waiting 30s gives any
+  // immediate drop time to fully copy + transcribe before sweeping.
+  const initialDelay = setTimeout(() => {
+    sweep(maxAgeMs).catch((err) => {
+      console.warn("[tempCleanup] initial sweep failed:", err);
+    });
+  }, 30_000);
 
   timer = setInterval(() => {
     sweep(maxAgeMs).catch((err) => {
@@ -71,6 +93,7 @@ export function startTempCleanup(maxAgeMs = TWELVE_HOURS_MS): () => void {
   }, ONE_HOUR_MS);
 
   return () => {
+    clearTimeout(initialDelay);
     if (timer) {
       clearInterval(timer);
       timer = null;

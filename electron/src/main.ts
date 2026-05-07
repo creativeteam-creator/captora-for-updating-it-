@@ -20,7 +20,7 @@
  */
 
 import { app, BrowserWindow, ipcMain, dialog, shell } from "electron";
-import { writeFile, mkdir, copyFile, appendFile } from "fs/promises";
+import { writeFile, mkdir, copyFile, appendFile, utimes } from "fs/promises";
 import { existsSync, statSync } from "fs";
 import { join } from "path";
 import { startNextServer, stopNextServer } from "./nextServer";
@@ -176,6 +176,11 @@ ipcMain.handle(
     try {
       await mkdir(sessionsDir, { recursive: true });
       await writeFile(filePath, Buffer.from(payload.bytes));
+      // Force mtime/atime to now. writeFile sets them automatically
+      // but we touch again for parity with the copyFile branch where
+      // source mtime would otherwise be inherited.
+      const now = new Date();
+      await utimes(filePath, now, now);
       // Post-write verification — catches silent failures
       if (!existsSync(filePath)) {
         throw new Error(`writeFile reported success but file is missing: ${filePath}`);
@@ -213,12 +218,21 @@ ipcMain.handle(
       }
       await mkdir(sessionsDir, { recursive: true });
       await copyFile(payload.sourcePath, destPath);
+      // CRITICAL: Node's copyFile preserves the source file's mtime.
+      // If the user dropped a video that's days/weeks/months old, the
+      // destination ends up with that ancient mtime — and the
+      // 12-hour cleanup sweep then sees it as "stale" and deletes it
+      // *before* /api/transcribe gets a chance to read it. Force
+      // mtime/atime to now so cleanup correctly treats this as a
+      // fresh file.
+      const now = new Date();
+      await utimes(destPath, now, now);
       // Post-copy verification — catches silent corruption
       if (!existsSync(destPath)) {
         throw new Error(`copyFile reported success but file is missing: ${destPath}`);
       }
       const size = statSync(destPath).size;
-      ipcLog(`copySourceFile OK size=${size} path=${destPath}`);
+      ipcLog(`copySourceFile OK size=${size} path=${destPath} (mtime touched)`);
       return destPath;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
