@@ -25,6 +25,7 @@ import { mkdir, readFile } from "fs/promises";
 import { existsSync, appendFileSync, createWriteStream } from "fs";
 import { join } from "path";
 import { app } from "electron";
+import { capabilitiesToEnv, loadOrDetectCapabilities } from "./capabilities";
 
 /**
  * Synchronous one-shot log line. Used for the diagnostic startup
@@ -129,6 +130,19 @@ export async function startNextServer(): Promise<ServerInfo> {
     console.warn(`[nextServer] no .env.production found at ${envFilePath} — cloud transcription will not work`);
   }
 
+  // Detect (or load cached) machine capabilities — Python presence,
+  // faster-whisper install, GPU, internet. Used to suppress paths that
+  // would otherwise spam errors per-transcription on machines that don't
+  // have Python installed (most non-dev installs). Cached for 7 days
+  // and re-probed on Captora upgrades.
+  const capabilities = await loadOrDetectCapabilities();
+  const capabilityEnv = capabilitiesToEnv(capabilities);
+  if (Object.keys(capabilityEnv).length > 0) {
+    console.log(
+      `[nextServer] capability-driven env overrides: ${Object.keys(capabilityEnv).join(", ")}`
+    );
+  }
+
   console.log(`[nextServer] spawning ${serverScript} on port ${port}`);
 
   serverProcess = spawn(process.execPath, [serverScript], {
@@ -139,6 +153,10 @@ export async function startNextServer(): Promise<ServerInfo> {
       // below so a value in the env file can't accidentally override
       // CAPTORA_MODE / paths.
       ...fileEnv,
+      // Capability overrides — applied AFTER fileEnv so a missing
+      // Python installation on the user's machine reliably disables
+      // FASTER_WHISPER_ENABLED even if .env.production says =1.
+      ...capabilityEnv,
       // CRITICAL: tells Electron to run as Node.js when invoked with a
       // script arg. Without this, `process.execPath` (which is the
       // Electron binary inside the packaged app) tries to launch as a

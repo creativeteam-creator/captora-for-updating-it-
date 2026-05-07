@@ -66,6 +66,7 @@ def _add_nvidia_dll_paths() -> None:
         return
     try:
         import importlib.util
+        import ctypes
         added: list[str] = []
         missing: list[str] = []
         for pkg in (
@@ -108,6 +109,33 @@ def _add_nvidia_dll_paths() -> None:
                 f"pip install nvidia-cublas-cu12 nvidia-cudnn-cu12 nvidia-cuda-nvrtc-cu12",
                 file=sys.stderr,
             )
+
+        # Pin the right DLLs into the process before CTranslate2 loads.
+        # os.add_dll_directory only affects DLL *search paths* — if a
+        # conflicting cublas64_12.dll exists earlier in PATH (older system
+        # CUDA install, etc.), CTranslate2's LoadLibrary may still pick
+        # the wrong one. Pre-loading via ctypes.CDLL forces the correct
+        # version to occupy the cublas64_12.dll slot in the process
+        # address space; later LoadLibrary calls return our handle.
+        # Order matters: load foundation libs first, then dependants.
+        preloaded: list[str] = []
+        for bin_dir in added:
+            try:
+                for fname in sorted(os.listdir(bin_dir)):
+                    if not fname.lower().endswith(".dll"):
+                        continue
+                    full = os.path.join(bin_dir, fname)
+                    try:
+                        ctypes.CDLL(full)
+                        preloaded.append(fname)
+                    except OSError:
+                        # Some bin/ dirs ship optional/diagnostic DLLs that
+                        # have unmet deps in headless setups; skip silently.
+                        pass
+            except OSError:
+                pass
+        if preloaded:
+            print(f"[whisper_gpu] preloaded {len(preloaded)} DLLs: {preloaded[:6]}{'...' if len(preloaded) > 6 else ''}", file=sys.stderr)
     except Exception as e:  # noqa: BLE001 — soft-fail; faster-whisper will surface a clearer error
         print(f"warning: could not register nvidia DLL paths: {e}", file=sys.stderr)
 
@@ -193,30 +221,115 @@ def main() -> int:
             word_timestamps=True,
             beam_size=10,
             temperature=0.0,
-            condition_on_previous_text=True,
-            no_speech_threshold=0.6,
-            compression_ratio_threshold=2.4,
-            log_prob_threshold=-1.0,
-            repetition_penalty=1.1,
-            vad_filter=True,
-            vad_parameters={"min_silence_duration_ms": 500},
+            # condition_on_previous_text=False — prevents Whisper from
+            # carrying decoder state across chunks, which on long videos
+            # tends to drift mid-way (the model latches onto a stale
+            # context and starts dropping or paraphrasing words). For
+            # 30-min+ recordings the consistency win is not worth the
+            # word loss.
+            condition_on_previous_text=False,
+            # All decoder filters dialled to maximum permissiveness — when
+            # Whisper drops mid-audio words, the timeline shows captions
+            # stuck on the surrounding word for several seconds. Letting
+            # more low-confidence chunks through is preferable; minor
+            # hallucinations in genuine silence are rare on real speech
+            # audio.
+            no_speech_threshold=0.2,    # was 0.3 — even more chunks decoded
+            compression_ratio_threshold=3.0,   # was 2.4 — keep "noisy" chunks
+            log_prob_threshold=-2.0,    # was -1.0 — accept lower-confidence words
+            repetition_penalty=1.0,
+            # VAD off entirely — even lenient VAD parameters were dropping
+            # words in stretches where the speaker pauses to breathe or
+            # speaks softly. Whisper's own internal silence handling is
+            # good enough on its own; relying on it processes the full
+            # audio with no pre-filter cuts.
+            vad_filter=False,
             initial_prompt=args.initial_prompt,
         )
 
         words = []
         text_parts = []
+        fragmented_segments = 0
         for segment in segments_iter:
-            text_parts.append(segment.text.strip())
-            if segment.words:
-                for w in segment.words:
+            seg_text = segment.text.strip()
+            text_parts.append(seg_text)
+
+            # Whisper's word_timestamps for Hindi / mixed Hindi+English audio
+            # often produces akshara-level (single character) splits instead
+            # of real word boundaries. Detect this by computing the average
+            # token length: if it's less than 2 chars, the timestamps are
+            # fragmented and would render as single-letter caption chips
+            # ("una", "a", "ji", "C", "1"...). Fall back to whitespace-split
+            # of the segment text with character-weighted timestamp
+            # distribution — same approach as the JS local Whisper path.
+            seg_words = segment.words or []
+            avg_len = (
+                sum(len((w.word or "").strip()) for w in seg_words) / len(seg_words)
+                if seg_words else 0.0
+            )
+            use_word_timestamps = seg_words and avg_len >= 2.0
+
+            # NOTE: previously a 1.2s per-word cap was applied here to
+            # prevent stuck captions when Whisper merged several spoken
+            # words into one token. The side effect was that any word
+            # whose Whisper-reported end exceeded start+1.2 left a
+            # caption-less GAP between its (capped) end and the next
+            # word's start — visible on the timeline as audio playing
+            # with no caption. The cap is removed; words now use their
+            # full reported duration. Stuck-caption cases (rare) are
+            # accepted as the lesser evil vs constant gaps.
+
+            if use_word_timestamps:
+                for w in seg_words:
                     token = (w.word or "").strip()
                     if not token:
                         continue
+                    start = float(w.start)
+                    end = float(w.end)
+                    words.append({"word": token, "start": start, "end": end})
+            else:
+                fragmented_segments += 1
+                # Distribute segment time across whitespace-split tokens,
+                # weighted by character count so longer words get more time.
+                seg_start = float(segment.start)
+                seg_end = float(segment.end)
+                seg_dur = max(0.05, seg_end - seg_start)
+                tokens = seg_text.split()
+                if not tokens:
+                    continue
+                char_weights = [max(1, len(t)) + 1 for t in tokens]
+                total_weight = sum(char_weights)
+                cursor = seg_start
+                for i, token in enumerate(tokens):
+                    w_dur = (char_weights[i] / total_weight) * seg_dur
+                    start = cursor
+                    # Last token snaps to seg_end so accumulated rounding
+                    # doesn't leave a gap before the next segment.
+                    end = seg_end if i == len(tokens) - 1 else start + w_dur
+                    cursor = end
                     words.append({
                         "word": token,
-                        "start": float(w.start),
-                        "end": float(w.end),
+                        "start": float(start),
+                        "end": float(end),
                     })
+
+        # Bridge gaps between consecutive words. Whisper's per-word `end`
+        # timestamps sometimes fall short of the actual word duration —
+        # leaving a small caption-less window before the next word starts.
+        # If the gap to the next word is < 2 seconds, extend this word's
+        # end to meet it. (Larger gaps preserve genuine speech pauses.)
+        for i in range(len(words) - 1):
+            gap = words[i + 1]["start"] - words[i]["end"]
+            if 0 < gap < 2.0:
+                words[i]["end"] = words[i + 1]["start"]
+
+        if fragmented_segments > 0:
+            print(
+                f"[whisper_gpu] note: re-split {fragmented_segments} segment(s) "
+                f"with fragmented word_timestamps (akshara-level output) "
+                f"using segment-text whitespace split.",
+                file=sys.stderr,
+            )
 
     except (RuntimeError, Exception) as e:
         err_msg = str(e)

@@ -31,6 +31,10 @@ import {
   transcribeWithShunyaHinglish,
   isShunyaHinglishEnabled,
 } from "./shunya-hinglish";
+import {
+  transcribeWithElevenLabs,
+  isElevenLabsEnabled,
+} from "./elevenlabs";
 import { decideRomanization, romaniseText, romaniseWords } from "./script";
 import {
   transliterateWordsToHinglish,
@@ -41,6 +45,7 @@ import {
 import type { WritingScript } from "./languages";
 
 export type TranscribeProvider =
+  | "elevenlabs"           // primary cloud provider (paid quota); falls back on quota/rate-limit
   | "shunya-hinglish"      // native Hinglish model — best for hi-roman
   | "faster-whisper-gpu"
   | "sarvam"
@@ -97,16 +102,26 @@ export async function transcribe(req: TranscribeRequest): Promise<TranscribeResu
 
 function pickProviderOrder(req: TranscribeRequest): TranscribeProvider[] {
   const order: TranscribeProvider[] = [];
+  const hasElevenLabs = isElevenLabsEnabled();
   const hasFasterWhisper = isFasterWhisperEnabled();
   const hasShunyaHinglish = isShunyaHinglishEnabled();
   const hasSarvam = !!process.env.SARVAM_API_KEY;
   const hasGroq = !!process.env.GROQ_API_KEY;
   const isHinglish = req.spokenLanguage === "hi-roman";
 
+  // ── ElevenLabs primary ───────────────────────────────────────────────────
+  // Highest priority when an API key is set: highest accuracy STT we
+  // have access to, with proper word timestamps. ElevenLabs only does
+  // source-language transcription (no translate-to-EN), so we skip it
+  // when translateToEnglish is set. On quota / rate-limit / network
+  // failure the router catches the throw and tries the next provider.
+  if (hasElevenLabs && !req.translateToEnglish) {
+    order.push("elevenlabs");
+  }
+
   // ── Hinglish (hi-roman) fast path ────────────────────────────────────────
   // Shunya model outputs native Roman Hinglish without any transliteration
   // step — much more natural than Whisper→Devanagari→optitrans.
-  // Priority: Shunya > faster-whisper-gpu > Groq > local-whisper
   if (isHinglish && hasShunyaHinglish) {
     order.push("shunya-hinglish");
   }
@@ -136,6 +151,12 @@ async function callProvider(
   const providerSpokenLanguage =
     req.spokenLanguage === "hi-roman" ? "hindi" : req.spokenLanguage;
   switch (provider) {
+    case "elevenlabs":
+      return transcribeWithElevenLabs({
+        filePath: req.filePath,
+        spokenLanguage: providerSpokenLanguage,
+        translateToEnglish: req.translateToEnglish,
+      });
     case "shunya-hinglish":
       // Native Hinglish model — outputs Roman Hinglish directly.
       // No transliteration needed; skip applyRomanizationIfNeeded for this provider.
@@ -243,21 +264,23 @@ async function applyRomanizationIfNeeded(
   });
   if (!romanize || !sourceScript) return raw;
 
-  // ── 2-pass LLM Hinglish conversion ──────────────────────────────────────
-  // If the provider output Devanagari AND we have Groq API key:
-  //   Pass 1: Whisper (any local provider) → Devanagari words + timestamps
-  //   Pass 2: Groq LLaMA → context-aware Hinglish ("apni" not "apani")
-  //
-  // This is far more accurate than optitrans regex because the LLM:
-  //   - understands schwa syncope in context
-  //   - preserves English loanwords (transplant, clinic, FUE)
-  //   - knows natural Hinglish spelling conventions
+  // ── 2-pass LLM Hinglish polish ──────────────────────────────────────────
+  // Two cases benefit from running the LLM polish:
+  //   1. Provider returned Devanagari (faster-whisper / Sarvam) → transliterate
+  //      to natural Roman Hinglish ("apni" not "apani").
+  //   2. Provider returned ROUGH Roman Hinglish with phonetic errors —
+  //      ElevenLabs Scribe in particular outputs Roman directly for Hindi
+  //      audio, with mistakes like "aine" / "doaktar" / "menbar" / "nanbar"
+  //      that need fixing. The same LLM, with an updated prompt, handles
+  //      both cases.
   //
   // Falls back to optitrans if Groq fails.
   const firstWord = raw.words[0]?.word ?? raw.text.split(" ")[0] ?? "";
   const outputIsDevanagari = isDevanagari(raw.text) || isDevanagari(firstWord);
+  const isHinglishTarget = req.spokenLanguage === "hi-roman";
+  const shouldPolishLLM = outputIsDevanagari || isHinglishTarget;
 
-  if (outputIsDevanagari && isHinglishLLMEnabled()) {
+  if (shouldPolishLLM && isHinglishLLMEnabled()) {
     try {
       const t0 = Date.now();
       const [llmWords, llmText] = await Promise.all([
@@ -271,11 +294,19 @@ async function applyRomanizationIfNeeded(
         "[transcribe] LLM transliteration failed, falling back to optitrans:",
         err instanceof Error ? err.message : err
       );
-      // Fall through to optitrans below
+      // Fall through to optitrans below — but only when the input is
+      // actually Devanagari. Running optitrans regex on already-Roman
+      // text would mangle it.
     }
   }
 
   // ── Fallback: optitrans (regex-based romanization) ───────────────────────
+  // Only valid when the source is a non-Latin script. If the provider
+  // already returned Roman (e.g. ElevenLabs Hinglish) and the LLM polish
+  // failed, return the raw Roman text as-is rather than corrupt it.
+  if (!outputIsDevanagari) {
+    return raw;
+  }
   return {
     ...raw,
     text: romaniseText(raw.text, sourceScript),
