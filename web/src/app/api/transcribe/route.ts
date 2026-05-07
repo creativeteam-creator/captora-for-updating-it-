@@ -97,6 +97,13 @@ export async function POST(req: NextRequest) {
     interface TranscribeBody {
       projectId?: string;
       storagePath?: string;
+      /** Desktop-mode authoritative path. When present, the route uses
+       *  this exact path on disk instead of recomputing
+       *  `sessionDir + projectId + ext`. Set by page.tsx from the value
+       *  the Electron IPC bridge reports it wrote to. Eliminates the
+       *  path-drift bug where two different processes each recompute
+       *  `app.getPath("userData")` and somehow disagree. */
+      localFilePath?: string;
       ext?: string;
       title?: string;
       spokenLanguage?: string;
@@ -157,32 +164,52 @@ export async function POST(req: NextRequest) {
     // Two paths converge here:
     //   - WEB mode:  source was uploaded to Supabase Storage by the
     //                browser; we download to tmp now.
-    //   - DESKTOP mode: source was written to <userData>/sessions/
-    //                by the Electron IPC bridge before this POST
-    //                fired; cloud download is never required (and
-    //                would always 404 because the source never went
-    //                to Supabase).
+    //   - DESKTOP mode: page.tsx passed `localFilePath` — the exact
+    //                absolute path the IPC bridge reports it wrote to.
+    //                We use that path verbatim. Never recompute
+    //                `sessionDir + projectId + ext` server-side, never
+    //                fall back to Supabase. Eliminates the
+    //                path-drift class of bugs where Electron main and
+    //                the spawned Next.js child each compute
+    //                `app.getPath("userData")` and disagree.
     await mkdir(sessionDir(), { recursive: true });
-    const localPath = join(sessionDir(), `${projectId}${ext}`);
-    const localExists = existsSync(localPath);
+    const reconstructedPath = join(sessionDir(), `${projectId}${ext}`);
+    // Prefer the IPC-returned path. Fall back to the reconstructed one
+    // if the renderer somehow forgot to send it (defensive).
+    const localPath = body.localFilePath ?? reconstructedPath;
     console.log(
-      `[/api/transcribe] sessionDir=${sessionDir()} localPath=${localPath} exists=${localExists} desktopMode=${isDesktopMode()}`
+      `[/api/transcribe] localPath=${localPath} reconstructedPath=${reconstructedPath} desktopMode=${isDesktopMode()}`
     );
+
+    // Tiny retry loop for AV / file-system flush races. existsSync can
+    // briefly return false right after copyFile completes if Windows
+    // Defender is mid-scan or the OS hasn't finished flushing buffers.
+    // 5 × 100ms = max 500ms wait, after which we conclude the file is
+    // genuinely missing.
+    let localExists = false;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      if (existsSync(localPath)) {
+        localExists = true;
+        if (attempt > 0) {
+          console.log(`[/api/transcribe] file appeared after ${attempt * 100}ms wait`);
+        }
+        break;
+      }
+      if (attempt === 4) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+
     try {
       if (localExists) {
-        console.log(`[/api/transcribe] using cached local file: ${localPath}`);
+        console.log(`[/api/transcribe] using local file: ${localPath}`);
       } else if (isDesktopMode()) {
-        // Hard guard — desktop mode ALWAYS expects the file locally.
-        // If it's missing, the IPC bridge failed before the POST or
-        // the user reopened a project whose source got auto-cleaned
-        // after 12h. Either way, falling through to Supabase is wrong
-        // (the file isn't there) — surface a clear error instead.
         return NextResponse.json(
           {
             ok: false,
             error:
-              `Source file not found at ${localPath}. ` +
-              `The 12-hour cleanup may have removed it, or the upload IPC failed. ` +
+              `Source file not found at ${localPath} (also checked ${reconstructedPath}). ` +
+              `Waited 500ms for filesystem flush. ` +
+              `The IPC bridge may have failed or AV quarantined the file. ` +
               `Re-drop the original file to retry.`,
           },
           { status: 500 }

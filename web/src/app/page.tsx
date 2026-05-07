@@ -275,13 +275,19 @@ export default function Home() {
       // Web: classic Supabase Storage upload, returns the storage
       // path. /api/transcribe then downloads it server-side.
       let storagePath: string;
+      // `localFilePath` is non-empty only in desktop mode. We capture
+      // the EXACT absolute path the IPC handler reports it wrote to,
+      // and pass it through to /api/transcribe — no recomputation
+      // server-side. Eliminates the path-drift bug where main and
+      // the Next.js child each recompute `app.getPath("userData")`
+      // independently and somehow disagree.
+      let localFilePath = "";
       if (isElectron()) {
-        await saveSourceFileLocally(file, ext, projectId);
+        localFilePath = await saveSourceFileLocally(file, ext, projectId);
         // /api/transcribe still requires storagePath to satisfy its
         // RLS path-prefix check. The file isn't actually in Supabase,
-        // but the path passes validation; the route then short-
-        // circuits the download because the file already exists on
-        // disk under the expected sessions/ name.
+        // but the path passes validation; the route then uses
+        // `localFilePath` as the actual on-disk source.
         storagePath = `${userId}/${projectId}${ext}`;
       } else {
         storagePath = await uploadSourceFromBrowser(
@@ -303,6 +309,10 @@ export default function Home() {
         body: JSON.stringify({
           projectId,
           storagePath,
+          // Authoritative on-disk path of the source — only set in
+          // desktop mode. The route uses this directly instead of
+          // recomputing `sessionDir + projectId + ext`.
+          localFilePath: localFilePath || undefined,
           ext,
           fileName: file.name,
           fileSize: file.size,
