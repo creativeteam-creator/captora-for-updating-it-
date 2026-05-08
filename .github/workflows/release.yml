@@ -143,12 +143,50 @@ jobs:
           EOF
           echo "Wrote web/.env.production ($(wc -l < web/.env.production) lines)"
 
-      - name: Build (Next.js standalone + Electron + installer + publish)
+      - name: Build Next.js standalone (web)
+        # Split out from the `release` script so the compositor pre-stage
+        # below can run AFTER the standalone tree exists but BEFORE
+        # electron-builder packs.
+        run: npm run build:web
+
+      - name: Pre-stage Remotion compositor binaries into Next.js standalone
+        # `@remotion/compositor-<platform>-<arch>` packages ship native
+        # binaries (`remotion`, `ffmpeg`, `ffprobe`) plus platform
+        # DLLs / dylibs. Next.js's standalone tracer copies their JS
+        # shims but not the native executables. We merge them in here
+        # with `cp -rn` (no-clobber): files Next.js already placed stay
+        # put, missing binaries get filled in. Same code path for Mac
+        # and Windows.
+        shell: bash
+        run: |
+          set -e
+          STANDALONE=web/.next/standalone/node_modules/@remotion
+          mkdir -p "$STANDALONE"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            COMPOSITORS="compositor-win32-x64-msvc"
+          else
+            COMPOSITORS="compositor-darwin-arm64 compositor-darwin-x64"
+          fi
+          for c in $COMPOSITORS; do
+            SRC="node_modules/@remotion/$c"
+            DST="$STANDALONE/$c"
+            if [ -d "$SRC" ]; then
+              echo "Staging $c → $DST"
+              mkdir -p "$DST"
+              # `cp -rn` (no-clobber) leaves Next.js-traced files alone
+              # and only fills in what's missing. BSD `cp -n` accepts
+              # the same flag so this works on macOS runners too.
+              cp -Rn "$SRC"/. "$DST"/ 2>/dev/null || cp -R "$SRC"/. "$DST"/
+              echo "Files in $DST:"
+              ls "$DST" | head -10
+            else
+              echo "Skipping $c (not installed in node_modules)"
+            fi
+          done
+
+      - name: Build Electron + installer + publish
         env:
           # `GH_TOKEN` is what electron-builder's GitHub publisher reads.
-          # The default `GITHUB_TOKEN` provided by Actions has the `contents: write`
-          # permission set at the workflow level above, which is enough to
-          # upload release assets.
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Optional Apple signing — only used when these are set in repo secrets.
           # Without them, Mac builds use ad-hoc signing (free path).
@@ -157,11 +195,10 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-        # `npm run release` runs build:all then `electron-builder --publish always`.
-        # The earlier workflow used `npm run dist:win -- --publish always` but
-        # npm's arg pass-through doesn't forward across `&&`-chained commands,
-        # so `--publish always` got eaten and electron-builder built installers
-        # without uploading them. `release` has `--publish always` baked in.
-        # No --win / --mac flag needed: electron-builder defaults to the current
-        # runner's platform, which is exactly what each matrix job wants.
-        run: npm run release
+        # Compile electron's TS, then run electron-builder with explicit
+        # `--publish always` so the GitHub publisher uploads the assets.
+        # We skipped `npm run release` because that re-runs build:web
+        # AFTER our pre-stage step, which would wipe the staged files.
+        run: |
+          npm run build:electron
+          npx electron-builder --publish always

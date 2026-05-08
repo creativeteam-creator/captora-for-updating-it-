@@ -81,13 +81,7 @@
         }
       ],
       "icon": "resources/icon.ico",
-      "publisherName": "QHT Clinic",
-      "extraResources": [
-        {
-          "from": "node_modules/@remotion/compositor-win32-x64-msvc",
-          "to": "web/.next/standalone/node_modules/@remotion/compositor-win32-x64-msvc"
-        }
-      ]
+      "publisherName": "QHT Clinic"
     },
     "nsis": {
       "oneClick": false,
@@ -110,17 +104,7 @@
       "identity": null,
       "gatekeeperAssess": false,
       "hardenedRuntime": false,
-      "type": "distribution",
-      "extraResources": [
-        {
-          "from": "node_modules/@remotion/compositor-darwin-arm64",
-          "to": "web/.next/standalone/node_modules/@remotion/compositor-darwin-arm64"
-        },
-        {
-          "from": "node_modules/@remotion/compositor-darwin-x64",
-          "to": "web/.next/standalone/node_modules/@remotion/compositor-darwin-x64"
-        }
-      ]
+      "type": "distribution"
     },
     "dmg": {
       "writeUpdateInfo": true,
