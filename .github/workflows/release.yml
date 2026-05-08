@@ -168,7 +168,17 @@ jobs:
           STANDALONE_NM=web/.next/standalone/node_modules
           mkdir -p "$STANDALONE_NM/@remotion"
 
-          # 1. @remotion/* packages — compositor binaries + bundler + renderer
+          # 1. The bare `remotion` package — exposes `remotion/no-react`
+          # which @remotion/studio-shared requires at runtime. Next.js
+          # missed it because the entry is loaded via deep-import string.
+          if [ -d node_modules/remotion ]; then
+            echo "Staging remotion (core)"
+            mkdir -p "$STANDALONE_NM/remotion"
+            cp -Rn node_modules/remotion/. "$STANDALONE_NM/remotion"/ 2>/dev/null || \
+              cp -R node_modules/remotion/. "$STANDALONE_NM/remotion"/
+          fi
+
+          # 2. @remotion/* packages — compositor binaries + bundler + renderer
           if [ -d node_modules/@remotion ]; then
             for pkg in node_modules/@remotion/*/; do
               name=$(basename "$pkg")
