@@ -15,7 +15,7 @@
  *   - Drop Shadow toggle (binds shadowOpacity)
  */
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   applyStyleOverrides,
   hexToRgb,
@@ -30,6 +30,7 @@ import {
   type FontCategory,
 } from "@captora/remotion";
 import { deleteUserFont, uploadFont, type UserFont } from "@/lib/userFonts";
+import { deleteTextPreset, listTextPresets, saveTextPreset, type TextPreset } from "@/lib/textPresets";
 
 /**
  * Group the curated font catalogue by category so the dropdown shows
@@ -72,7 +73,31 @@ interface Props {
 export function TextPanel({ base, overrides, onChange, onReset, userFonts, onUserFontsChanged }: Props) {
   const merged = applyStyleOverrides(base, overrides);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
   const [uploadStatus, setUploadStatus] = useState<{ kind: "idle" | "uploading" | "error"; message?: string }>({ kind: "idle" });
+
+  // ── My Presets — locally-saved snapshots of CaptionStyleOverrides ───────
+  const [presets, setPresets] = useState<TextPreset[]>([]);
+  useEffect(() => {
+    setPresets(listTextPresets());
+  }, []);
+
+  const handleSavePreset = () => {
+    const name = window.prompt("Preset name (will overwrite if it exists):");
+    if (!name || !name.trim()) return;
+    saveTextPreset(name.trim(), overrides);
+    setPresets(listTextPresets());
+  };
+
+  const handleApplyPreset = (preset: TextPreset) => {
+    onChange(preset.overrides);
+  };
+
+  const handleDeletePreset = (preset: TextPreset) => {
+    if (!window.confirm(`Delete preset "${preset.name}"?`)) return;
+    deleteTextPreset(preset.id);
+    setPresets(listTextPresets());
+  };
 
   const set = <K extends keyof CaptionStyleOverrides>(key: K, value: CaptionStyleOverrides[K]) => {
     onChange({ ...overrides, [key]: value });
@@ -80,22 +105,109 @@ export function TextPanel({ base, overrides, onChange, onReset, userFonts, onUse
 
   const handleUploadClick = () => fileInputRef.current?.click();
 
-  const handleFilePicked = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = ""; // allow re-picking the same file later
-    if (!file) return;
+  /**
+   * Strip variant suffixes from a filename to derive the family name when
+   * uploading a folder. e.g. "Inter-BoldItalic.ttf" → "Inter".
+   */
+  const familyFromFilename = (name: string): string => {
+    const stem = name.replace(/\.(ttf|otf|woff2?|TTF|OTF|WOFF2?)$/i, "");
+    // Strip trailing weight/style tokens. Order matters: longer first.
+    const VARIANT_TOKENS = [
+      "Thin", "ExtraLight", "UltraLight", "Light", "Regular", "Book", "Medium",
+      "SemiBold", "DemiBold", "Bold", "ExtraBold", "UltraBold", "Black", "Heavy",
+      "Italic", "Oblique",
+    ];
+    let result = stem;
+    // Repeatedly strip trailing tokens (handles "Inter-BoldItalic" → "Inter")
+    for (let i = 0; i < 3; i++) {
+      let stripped = false;
+      for (const token of VARIANT_TOKENS) {
+        const re = new RegExp(`[-_\\s]?${token}$`, "i");
+        if (re.test(result)) {
+          result = result.replace(re, "");
+          stripped = true;
+          break;
+        }
+      }
+      if (!stripped) break;
+    }
+    return result.trim() || stem;
+  };
 
-    const defaultName = file.name.replace(/\.(ttf|otf|woff2?|TTF|OTF|WOFF2?)$/i, "");
-    const family = window.prompt("Font family name (this is what captions reference):", defaultName);
+  const handleFilePicked = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = ""; // allow re-picking the same file/folder later
+    if (files.length === 0) return;
+
+    // Single-file picker: prompt the user for a friendly family name (legacy flow).
+    if (files.length === 1) {
+      const file = files[0];
+      const defaultName = familyFromFilename(file.name);
+      const family = window.prompt(
+        "Font family name (this is what captions reference):",
+        defaultName
+      );
+      if (!family || !family.trim()) return;
+
+      setUploadStatus({ kind: "uploading" });
+      try {
+        const uploaded = await uploadFont(file, family.trim());
+        await onUserFontsChanged();
+        setUploadStatus({ kind: "idle" });
+        set("fontFamily", `'${uploaded.family}', ${matchFontStack(merged.fontFamily)}`);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Upload failed";
+        setUploadStatus({ kind: "error", message });
+      }
+      return;
+    }
+
+    // Folder / multi-file pick: derive the family from the first file's
+    // stem and upload every variant under the same family. The browser
+    // picks the right weight/style automatically via @font-face.
+    const fontFiles = files.filter((f) =>
+      /\.(ttf|otf|woff2?)$/i.test(f.name)
+    );
+    if (fontFiles.length === 0) {
+      setUploadStatus({
+        kind: "error",
+        message: "No .ttf / .otf / .woff files found in selection",
+      });
+      return;
+    }
+
+    const inferredFamily = familyFromFilename(fontFiles[0].name);
+    const family = window.prompt(
+      `Family name for ${fontFiles.length} font files:`,
+      inferredFamily
+    );
     if (!family || !family.trim()) return;
 
     setUploadStatus({ kind: "uploading" });
     try {
-      const uploaded = await uploadFont(file, family.trim());
+      let firstUploaded: Awaited<ReturnType<typeof uploadFont>> | null = null;
+      let errors = 0;
+      for (const file of fontFiles) {
+        try {
+          const u = await uploadFont(file, family.trim());
+          if (!firstUploaded) firstUploaded = u;
+        } catch (err) {
+          errors++;
+          console.warn(`upload failed for ${file.name}:`, err);
+        }
+      }
       await onUserFontsChanged();
-      setUploadStatus({ kind: "idle" });
-      // Auto-select the newly uploaded font.
-      set("fontFamily", `'${uploaded.family}', ${matchFontStack(merged.fontFamily)}`);
+      setUploadStatus(
+        errors > 0
+          ? {
+              kind: "error",
+              message: `Uploaded ${fontFiles.length - errors}/${fontFiles.length} files (${errors} failed — check console)`,
+            }
+          : { kind: "idle" }
+      );
+      if (firstUploaded) {
+        set("fontFamily", `'${firstUploaded.family}', ${matchFontStack(merged.fontFamily)}`);
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Upload failed";
       setUploadStatus({ kind: "error", message });
@@ -129,6 +241,57 @@ export function TextPanel({ base, overrides, onChange, onReset, userFonts, onUse
       </div>
 
       <div className="flex-1 space-y-4 overflow-y-auto p-4">
+        {/* ── My Presets — save/load CaptionStyleOverrides snapshots ─── */}
+        <ControlRow label="My Presets">
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-1.5">
+              <select
+                value=""
+                onChange={(e) => {
+                  const preset = presets.find((p) => p.id === e.target.value);
+                  if (preset) handleApplyPreset(preset);
+                  e.target.value = "";
+                }}
+                disabled={presets.length === 0}
+                className="h-8 flex-1 rounded-md border border-[var(--border)] bg-[var(--bg-elevated)] px-2 text-xs text-[var(--text)] focus:border-[var(--accent)] focus:outline-none disabled:opacity-50"
+              >
+                <option value="">
+                  {presets.length === 0 ? "No saved presets" : "Apply preset…"}
+                </option>
+                {presets.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={handleSavePreset}
+                className="rounded-md border border-[var(--border)] bg-[var(--bg-elevated)] px-2.5 py-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)] hover:border-[var(--accent)] hover:text-[var(--text)]"
+                title="Save current settings as a new preset"
+              >
+                + Save
+              </button>
+            </div>
+            {presets.length > 0 && (
+              <div className="flex flex-wrap gap-1">
+                {presets.map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => handleDeletePreset(p)}
+                    className="group inline-flex items-center gap-1 rounded-full border border-[var(--border-subtle)] px-2 py-0.5 text-[10px] text-[var(--text-muted)] hover:border-red-400 hover:text-red-400"
+                    title={`Delete "${p.name}"`}
+                  >
+                    <span>{p.name}</span>
+                    <span className="opacity-50 group-hover:opacity-100">×</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </ControlRow>
+
         <ControlRow label="Fonts">
           <select
             value={matchFontStack(merged.fontFamily)}
@@ -170,6 +333,22 @@ export function TextPanel({ base, overrides, onChange, onReset, userFonts, onUse
             ref={fileInputRef}
             type="file"
             accept=".ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff,font/woff2"
+            multiple
+            onChange={handleFilePicked}
+            className="hidden"
+          />
+          {/* Folder picker — `webkitdirectory` lets the user pick a whole
+              font-family folder; the handler uploads every .ttf/.otf inside
+              under one family name (so "Inter-Bold.ttf" + "Inter-Italic.ttf"
+              etc. become a single Inter family with multiple variants). */}
+          <input
+            ref={folderInputRef}
+            type="file"
+            // @ts-expect-error — webkitdirectory not in the standard React
+            // typings yet, but every Chromium-based browser (Electron) honours it.
+            webkitdirectory=""
+            directory=""
+            multiple
             onChange={handleFilePicked}
             className="hidden"
           />
@@ -180,7 +359,16 @@ export function TextPanel({ base, overrides, onChange, onReset, userFonts, onUse
               disabled={uploadStatus.kind === "uploading"}
               className="flex-1 rounded-md border border-dashed border-[var(--border)] bg-[var(--bg-elevated)] px-2 py-1.5 text-[11px] uppercase tracking-wide text-[var(--text-muted)] hover:border-[var(--accent)] hover:text-[var(--text)] disabled:opacity-50"
             >
-              {uploadStatus.kind === "uploading" ? "Uploading…" : "+ Upload Font (.ttf / .otf / .woff)"}
+              {uploadStatus.kind === "uploading" ? "Uploading…" : "+ File"}
+            </button>
+            <button
+              type="button"
+              onClick={() => folderInputRef.current?.click()}
+              disabled={uploadStatus.kind === "uploading"}
+              className="flex-1 rounded-md border border-dashed border-[var(--border)] bg-[var(--bg-elevated)] px-2 py-1.5 text-[11px] uppercase tracking-wide text-[var(--text-muted)] hover:border-[var(--accent)] hover:text-[var(--text)] disabled:opacity-50"
+              title="Pick a folder containing a font family — every .ttf/.otf inside is uploaded under one family name"
+            >
+              + Family Folder
             </button>
           </div>
           {uploadStatus.kind === "error" && (
@@ -246,6 +434,95 @@ export function TextPanel({ base, overrides, onChange, onReset, userFonts, onUse
           />
         </ControlRow>
 
+        {/* ── Text Style — bold / italic / underline / case ──────────── */}
+        <ControlRow label="Style">
+          <div className="flex items-center gap-1">
+            <StyleToggle
+              label="B"
+              title="Bold"
+              bold
+              active={merged.bold !== false}
+              onChange={(v) => set("bold", v)}
+            />
+            <StyleToggle
+              label="I"
+              title="Italic"
+              italic
+              active={!!merged.italic}
+              onChange={(v) => set("italic", v)}
+            />
+            <StyleToggle
+              label="U"
+              title="Underline"
+              underline
+              active={!!merged.underline}
+              onChange={(v) => set("underline", v)}
+            />
+            <div className="ml-1 inline-flex rounded-md border border-[var(--border-subtle)] overflow-hidden">
+              {(["upper", "sentence", "lower"] as const).map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  className={`px-2 py-1 text-[10px] uppercase tracking-wide ${
+                    (merged.textCase ?? "upper") === c
+                      ? "bg-[var(--accent)] text-black"
+                      : "text-[var(--text-muted)] hover:text-[var(--text)]"
+                  }`}
+                  title={c === "upper" ? "ALL CAPS" : c === "lower" ? "lowercase" : "Sentence case"}
+                  onClick={() => set("textCase", c)}
+                >
+                  {c === "upper" ? "AA" : c === "lower" ? "aa" : "Aa"}
+                </button>
+              ))}
+            </div>
+          </div>
+        </ControlRow>
+
+        {/* ── Alignment (left/center/right) ──────────────────────────── */}
+        <ControlRow label="Align">
+          <div className="inline-flex rounded-md border border-[var(--border-subtle)] overflow-hidden">
+            {(["left", "center", "right"] as const).map((a) => (
+              <button
+                key={a}
+                type="button"
+                className={`px-3 py-1 text-[11px] ${
+                  (merged.textAlign ?? "center") === a
+                    ? "bg-[var(--accent)] text-black"
+                    : "text-[var(--text-muted)] hover:text-[var(--text)]"
+                }`}
+                title={`Align ${a}`}
+                onClick={() => set("textAlign", a)}
+              >
+                {a === "left" ? "⟸" : a === "right" ? "⟹" : "≡"}
+              </button>
+            ))}
+          </div>
+        </ControlRow>
+
+        {/* ── Letter spacing ─────────────────────────────────────────── */}
+        <ControlRow label="Letter Spacing">
+          <SliderWithNumber
+            value={merged.letterSpacing ?? 0}
+            min={-2}
+            max={20}
+            step={0.5}
+            unit="px"
+            onChange={(v) => set("letterSpacing", v)}
+          />
+        </ControlRow>
+
+        {/* ── Line spacing (line-height multiplier) ─────────────────── */}
+        <ControlRow label="Line Spacing">
+          <SliderWithNumber
+            value={Math.round((merged.lineHeight ?? 1.05) * 100)}
+            min={80}
+            max={200}
+            step={5}
+            unit="%"
+            onChange={(v) => set("lineHeight", v / 100)}
+          />
+        </ControlRow>
+
         <ControlRow label="Highlight Color">
           <ColorInput
             value={rgbToHex(merged.highlightColor)}
@@ -285,6 +562,92 @@ export function TextPanel({ base, overrides, onChange, onReset, userFonts, onUse
         </div>
 
         {merged.shadowOpacity > 0.05 && (
+          <>
+          {/* ── Glow mode (none / active-only / all) ─────────────── */}
+          <ControlRow label="Glow">
+            <div className="inline-flex rounded-md border border-[var(--border-subtle)] overflow-hidden">
+              {(["none", "active", "all"] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  className={`px-2 py-1 text-[10px] uppercase tracking-wide ${
+                    (merged.glowMode ?? (merged.glowOnActive ? "active" : "none")) === m
+                      ? "bg-[var(--accent)] text-black"
+                      : "text-[var(--text-muted)] hover:text-[var(--text)]"
+                  }`}
+                  onClick={() => set("glowMode", m)}
+                >
+                  {m}
+                </button>
+              ))}
+            </div>
+          </ControlRow>
+
+          {(merged.glowMode ?? (merged.glowOnActive ? "active" : "none")) !== "none" && (
+            <>
+              <ControlRow label="Glow Color">
+                <ColorInput
+                  value={rgbToHex(merged.glowColor ?? merged.highlightColor)}
+                  onChange={(hex) => {
+                    const rgb = hexToRgb(hex);
+                    if (rgb) set("glowColor", rgb);
+                  }}
+                />
+              </ControlRow>
+              <ControlRow label="Glow Blur">
+                <SliderWithNumber
+                  value={merged.glowBlur ?? 24}
+                  min={4}
+                  max={80}
+                  step={1}
+                  unit="px"
+                  onChange={(v) => set("glowBlur", v)}
+                />
+              </ControlRow>
+            </>
+          )}
+
+          {/* ── Drop shadow tuning (offsets + blur + color) ─────── */}
+          <ControlRow label="Shadow Offset X">
+            <SliderWithNumber
+              value={merged.dropShadowOffsetX ?? 0}
+              min={-20}
+              max={20}
+              step={1}
+              unit="px"
+              onChange={(v) => set("dropShadowOffsetX", v)}
+            />
+          </ControlRow>
+          <ControlRow label="Shadow Offset Y">
+            <SliderWithNumber
+              value={merged.dropShadowOffsetY ?? 4}
+              min={-20}
+              max={20}
+              step={1}
+              unit="px"
+              onChange={(v) => set("dropShadowOffsetY", v)}
+            />
+          </ControlRow>
+          <ControlRow label="Shadow Blur">
+            <SliderWithNumber
+              value={merged.dropShadowBlur ?? 12}
+              min={0}
+              max={60}
+              step={1}
+              unit="px"
+              onChange={(v) => set("dropShadowBlur", v)}
+            />
+          </ControlRow>
+          <ControlRow label="Shadow Color">
+            <ColorInput
+              value={rgbToHex(merged.dropShadowColor ?? [0, 0, 0])}
+              onChange={(hex) => {
+                const rgb = hexToRgb(hex);
+                if (rgb) set("dropShadowColor", rgb);
+              }}
+            />
+          </ControlRow>
+
           <ControlRow label="Shadow Opacity">
             <SliderWithNumber
               value={Math.round(merged.shadowOpacity * 100)}
@@ -295,6 +658,7 @@ export function TextPanel({ base, overrides, onChange, onReset, userFonts, onUse
               onChange={(v) => set("shadowOpacity", v / 100)}
             />
           </ControlRow>
+          </>
         )}
 
         <ControlRow label="Pop-in Speed">
@@ -398,6 +762,48 @@ function ColorInput({ value, onChange }: { value: string; onChange: (hex: string
         className="flex-1 bg-transparent text-xs uppercase tracking-wide text-[var(--text)] focus:outline-none"
       />
     </div>
+  );
+}
+
+/**
+ * Square toggle button for B / I / U formatting. Shows the letter rendered
+ * in the corresponding style so the button itself previews the effect.
+ */
+function StyleToggle({
+  label,
+  title,
+  active,
+  onChange,
+  bold,
+  italic,
+  underline,
+}: {
+  label: string;
+  title: string;
+  active: boolean;
+  onChange: (v: boolean) => void;
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      onClick={() => onChange(!active)}
+      className={`flex h-7 w-7 items-center justify-center rounded-md border text-[12px] transition ${
+        active
+          ? "border-[var(--accent)] bg-[var(--accent)] text-black"
+          : "border-[var(--border-subtle)] text-[var(--text-muted)] hover:text-[var(--text)] hover:border-[var(--border)]"
+      }`}
+      style={{
+        fontWeight: bold ? 800 : 500,
+        fontStyle: italic ? "italic" : "normal",
+        textDecoration: underline ? "underline" : "none",
+      }}
+    >
+      {label}
+    </button>
   );
 }
 

@@ -12,7 +12,7 @@
  * style is what the preview and /api/render both consume.
  */
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { PlayerRef } from "@remotion/player";
 import { CaptionPreview } from "./CaptionPreview";
 import { CaptionsList } from "./CaptionsList";
@@ -92,6 +92,9 @@ interface Props {
   /** Clears the per-line template override for the selected line so
    *  it falls back to the global template. No-op when no selection. */
   onClearLineStyle: () => void;
+  /** Per-word fontSize multipliers (centisecond keys → multiplier). */
+  wordSizes: Record<string, number>;
+  onWordSizesChange: (next: Record<string, number>) => void;
 }
 
 export function EditorView({
@@ -104,6 +107,7 @@ export function EditorView({
   canvasWidth, canvasHeight,
   lineAnimations, onLineAnimationsChange,
   lineStyles, lineOverrides, selectedLineKey, onSelectLine, onPickTemplate, onClearLineStyle,
+  wordSizes, onWordSizesChange,
 }: Props) {
   // Single point that handles per-line variant edits. Setting a variant
   // adds/replaces the key; passing `null` removes it (resetting that
@@ -123,6 +127,148 @@ export function EditorView({
   // (reads currentFrame + seeks). Created once per editor session so
   // its identity stays stable across re-renders.
   const playerRef = useRef<PlayerRef>(null);
+
+  // Drag-to-reposition mode: when on, the preview overlay captures
+  // pointer events and updates horizontalPosition / verticalPosition
+  // (per-line if a line is selected, otherwise global).
+  const [dragModeActive, setDragModeActive] = useState(false);
+
+  // ── Program zoom + hand tool ───────────────────────────────────────────
+  // Lets the user zoom into the preview canvas (mouse wheel or +/- keys),
+  // pan with the hand tool (spacebar+drag, or toolbar toggle), and snap
+  // back to "fit to viewport" with one click. Useful on small laptop
+  // screens or when fine-tuning a specific corner of the canvas.
+  const [zoom, setZoom] = useState(1);
+  const [panX, setPanX] = useState(0);
+  const [panY, setPanY] = useState(0);
+  const [handToolToggled, setHandToolToggled] = useState(false);
+  const [handToolHeld, setHandToolHeld] = useState(false); // spacebar held
+  const handToolActive = handToolToggled || handToolHeld;
+  const ZOOM_MIN = 0.25;
+  const ZOOM_MAX = 5;
+  const ZOOM_STEP = 1.15;
+
+  // Spacebar = temporary hand tool (industry-standard shortcut from
+  // Photoshop / Figma / Premiere). Only when no input/textarea is focused
+  // so it doesn't interfere with caption editing.
+  useEffect(() => {
+    const isTypingTarget = (t: EventTarget | null) => {
+      if (!(t instanceof HTMLElement)) return false;
+      const tag = t.tagName;
+      return tag === "INPUT" || tag === "TEXTAREA" || t.isContentEditable;
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (isTypingTarget(e.target)) return;
+      if (e.code === "Space" && !e.repeat) {
+        e.preventDefault();
+        setHandToolHeld(true);
+      } else if ((e.key === "+" || e.key === "=") && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        setZoom((z) => Math.min(ZOOM_MAX, z * ZOOM_STEP));
+      } else if (e.key === "-" && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        setZoom((z) => Math.max(ZOOM_MIN, z / ZOOM_STEP));
+      } else if (e.key === "0" && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        setZoom(1);
+        setPanX(0);
+        setPanY(0);
+      } else if ((e.key === "h" || e.key === "H") && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        // H = Hand tool (industry standard from Photoshop / Premiere).
+        e.preventDefault();
+        setHandToolToggled(true);
+        setHandToolHeld(false);
+        panRef.current = null;
+      } else if ((e.key === "v" || e.key === "V") && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        // V = Selector / default cursor (mirror of Photoshop / Premiere).
+        e.preventDefault();
+        setHandToolToggled(false);
+        setHandToolHeld(false);
+        panRef.current = null;
+      } else if (e.key === "Tab" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        // Tab = Play / pause via the Player ref. Prevented from bubbling
+        // so it doesn't shift focus around the editor at the same time.
+        e.preventDefault();
+        const p = playerRef.current;
+        if (p) {
+          if (p.isPlaying()) p.pause();
+          else p.play();
+        }
+      }
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.code === "Space") setHandToolHeld(false);
+    };
+    // Safety net — if focus shifts while spacebar is held, the keyup
+    // never fires inside this window. Clearing on blur prevents the
+    // hand tool from getting stuck on after an alt-tab.
+    const onBlur = () => setHandToolHeld(false);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
+    };
+  }, []);
+
+  const handleZoomReset = () => {
+    setZoom(1);
+    setPanX(0);
+    setPanY(0);
+  };
+
+  const handleZoomIn = () => setZoom((z) => Math.min(ZOOM_MAX, z * ZOOM_STEP));
+  const handleZoomOut = () => setZoom((z) => Math.max(ZOOM_MIN, z / ZOOM_STEP));
+
+  const handleWheelZoom = (e: React.WheelEvent<HTMLDivElement>) => {
+    // Always zoom on wheel inside the preview area — no modifier needed.
+    // The preview frame doesn't scroll, so capturing the wheel here is
+    // intuitive (same UX as Premiere / Photoshop / Figma viewports).
+    e.preventDefault();
+    const factor = e.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
+    setZoom((z) => Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z * factor)));
+  };
+
+  // Pan: while hand-tool is active, dragging the preview moves the
+  // canvas inside its frame. Tracked with refs so the handlers stay
+  // stable; React state is updated each move so the transform follows.
+  const panRef = useRef<{ startX: number; startY: number; basePanX: number; basePanY: number } | null>(null);
+  const handlePanDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!handToolActive) return;
+    e.preventDefault();
+    (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+    panRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      basePanX: panX,
+      basePanY: panY,
+    };
+  };
+  const handlePanMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!handToolActive || !panRef.current) return;
+    const dx = e.clientX - panRef.current.startX;
+    const dy = e.clientY - panRef.current.startY;
+    setPanX(panRef.current.basePanX + dx);
+    setPanY(panRef.current.basePanY + dy);
+  };
+  const handlePanUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    panRef.current = null;
+    try { (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId); } catch { /* ok */ }
+  };
+
+  // Update horizontal/vertical position via the same `onOverridesChange`
+  // the TextPanel uses — page.tsx routes this to the per-line overrides
+  // map when `selectedLineKey` is set, or to the global overrides when
+  // nothing's selected. Either way the next render reflects the drag.
+  const handleCaptionDrag = (x: number, y: number) => {
+    onOverridesChange({
+      ...overrides,
+      horizontalPosition: x,
+      verticalPosition: y,
+    });
+  };
 
   const baseStyle = CAPTION_STYLES[styleId];
   const computedStyle: CaptionStyle = applyStyleOverrides(baseStyle, overrides);
@@ -171,6 +317,8 @@ export function EditorView({
             onWordsChange={onWordsChange}
             lineAnimations={lineAnimations}
             onLineAnimationChange={handleLineAnimationChange}
+            wordSizes={wordSizes}
+            onWordSizesChange={onWordSizesChange}
           />
         )}
         {leftTab === "fonts" && (
@@ -283,19 +431,40 @@ export function EditorView({
           </div>
         </div>
 
-        <div className="flex flex-1 items-center justify-center overflow-hidden p-8">
-          {/* Sized so the long edge fits a sensible viewport. Vertical
-              reel → narrow column (320px wide); horizontal YT → wide
-              row (~720px wide); square → ~480px. The Player itself
-              fills 100% of this container and locks its aspect ratio. */}
+        <div
+          className="flex flex-1 items-center justify-center overflow-hidden p-8"
+          onWheel={handleWheelZoom}
+          onPointerDown={handlePanDown}
+          onPointerMove={handlePanMove}
+          onPointerUp={handlePanUp}
+          onPointerCancel={handlePanUp}
+          style={{
+            cursor: handToolActive
+              ? panRef.current
+                ? "grabbing"
+                : "grab"
+              : undefined,
+          }}
+        >
+          {/* Premiere-style responsive sizing — the preview shrinks WITH
+              the viewport instead of fixing a 320 / 405-px upper bound.
+              `aspectRatio` locks the canvas shape; CSS picks the larger
+              valid dimension under the viewport's available space.
+              Result: shrinking the window shrinks the program preview;
+              you never need to scroll past it to reach controls. */}
           <div
-            className="w-full"
+            className="relative mx-auto"
             style={{
-              maxWidth:
-                canvasHeight >= canvasWidth
-                  ? "320px"
-                  : `${Math.round((canvasWidth / canvasHeight) * 405)}px`,
-              maxHeight: "calc(100vh - 200px)",
+              width: "min(100%, calc((100vh - 220px) * " +
+                (canvasWidth / canvasHeight) + "))",
+              aspectRatio: `${canvasWidth} / ${canvasHeight}`,
+              transform: `translate(${panX}px, ${panY}px) scale(${zoom})`,
+              transformOrigin: "center center",
+              transition: panRef.current ? "none" : "transform 80ms ease-out",
+              // While in hand-tool mode, swallow pointer-down on the
+              // child so the pan handler on the parent fires (otherwise
+              // Player's clickToPlay would intercept).
+              pointerEvents: handToolActive ? "none" : "auto",
             }}
           >
             <CaptionPreview
@@ -310,8 +479,102 @@ export function EditorView({
               height={canvasHeight}
               lineAnimations={lineAnimations}
               lineStyles={computedLineStyles}
+              wordSizes={wordSizes}
               playerRef={playerRef}
+              dragModeActive={dragModeActive}
+              onPositionChange={handleCaptionDrag}
             />
+          </div>
+
+          {/* Preview toolbar — Move-caption + Program zoom controls.
+              Sits below the preview so the user can flip into drag mode
+              without leaving the editor center column. */}
+          <div className="mt-2 flex flex-wrap items-center justify-center gap-3">
+            {/* Zoom controls */}
+            <div className="inline-flex items-center gap-1 rounded-md border border-[var(--border)] bg-[var(--bg-elevated)] px-1.5 py-1">
+              <button
+                type="button"
+                onClick={handleZoomOut}
+                disabled={zoom <= ZOOM_MIN + 0.001}
+                className="flex h-6 w-6 items-center justify-center rounded text-sm text-[var(--text-muted)] hover:bg-[var(--bg-hover)] hover:text-[var(--text)] disabled:opacity-30"
+                title="Zoom out (Ctrl/Cmd + −)"
+              >
+                −
+              </button>
+              <button
+                type="button"
+                onClick={handleZoomReset}
+                className="min-w-[48px] rounded px-1.5 py-0.5 text-[10px] font-mono tabular-nums text-[var(--text-muted)] hover:bg-[var(--bg-hover)] hover:text-[var(--text)]"
+                title="Reset to fit (Ctrl/Cmd + 0)"
+              >
+                {Math.round(zoom * 100)}%
+              </button>
+              <button
+                type="button"
+                onClick={handleZoomIn}
+                disabled={zoom >= ZOOM_MAX - 0.001}
+                className="flex h-6 w-6 items-center justify-center rounded text-sm text-[var(--text-muted)] hover:bg-[var(--bg-hover)] hover:text-[var(--text)] disabled:opacity-30"
+                title="Zoom in (Ctrl/Cmd + +)"
+              >
+                +
+              </button>
+              <div className="mx-1 h-4 w-px bg-[var(--border)]" />
+              <button
+                type="button"
+                onClick={() => {
+                  // Toggling clears the spacebar-held flag too, so a stuck
+                  // keyup (window blur during spacebar) doesn't leave the
+                  // hand tool permanently on.
+                  setHandToolToggled((v) => !v);
+                  setHandToolHeld(false);
+                  panRef.current = null;
+                }}
+                className={`flex h-6 w-6 items-center justify-center rounded text-sm transition ${
+                  handToolToggled
+                    ? "bg-[var(--accent)] text-black"
+                    : "text-[var(--text-muted)] hover:bg-[var(--bg-hover)] hover:text-[var(--text)]"
+                }`}
+                title={
+                  handToolToggled
+                    ? "Hand tool ON — click again to disable"
+                    : "Hand tool — drag to pan (or hold Spacebar)"
+                }
+              >
+                ✋
+              </button>
+              <button
+                type="button"
+                onClick={handleZoomReset}
+                className="rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-[var(--text-muted)] hover:bg-[var(--bg-hover)] hover:text-[var(--text)]"
+                title="Fit to viewport (Ctrl/Cmd + 0)"
+              >
+                Fit
+              </button>
+            </div>
+            {/* Move-caption toggle (existing). */}
+            <button
+              type="button"
+              onClick={() => setDragModeActive((v) => !v)}
+              className={`inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-[11px] uppercase tracking-wide transition ${
+                dragModeActive
+                  ? "border-[var(--accent)] bg-[var(--accent)] text-black"
+                  : "border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--text-muted)] hover:border-[var(--accent)] hover:text-[var(--text)]"
+              }`}
+              title={
+                selectedLineKey
+                  ? "Drag the selected line's caption"
+                  : "Drag the global caption position"
+              }
+            >
+              {dragModeActive ? "✕ Exit Move Mode" : "✥ Move Caption"}
+            </button>
+            {dragModeActive && (
+              <span className="text-[10px] text-[var(--text-muted)]">
+                {selectedLineKey
+                  ? "Repositioning selected line only"
+                  : "Repositioning all captions globally"}
+              </span>
+            )}
           </div>
         </div>
 

@@ -43,7 +43,44 @@ export interface CaptionStyle {
   /** X position as a fraction of frame width (0 = left, 1 = right). */
   horizontalPosition?: number;
   verticalPosition: number;
-  textCase?: "upper" | "sentence";
+  textCase?: "upper" | "lower" | "sentence";
+  /** Additional bold weight ON TOP of the font's natural weight.
+   *  Useful for fonts like Inter/Montserrat that have light defaults. */
+  bold?: boolean;
+  /** Italic / oblique style. */
+  italic?: boolean;
+  /** Underline decoration on every word. */
+  underline?: boolean;
+  /** Line-height multiplier for wrapped phrases. 1.0 = font default,
+   *  1.2 = 20% extra leading, etc. Range 0.8–2.0. */
+  lineHeight?: number;
+  /** Letter-spacing in pixels. Negative = tighter, positive = wider.
+   *  Common range: −2 to 8. */
+  letterSpacing?: number;
+  /** Paragraph alignment when phrase wraps to multiple lines. */
+  textAlign?: "left" | "center" | "right";
+  /**
+   * Drop-shadow tuning. `shadowOpacity` already controls the legacy preset
+   * (offset 0/4, blur 12, black). When any of these explicit fields is set
+   * the renderer uses them directly. Color falls back to black; blur to
+   * 12px; offsets to 0/4.
+   */
+  dropShadowColor?: RGB;
+  dropShadowBlur?: number;
+  dropShadowOffsetX?: number;
+  dropShadowOffsetY?: number;
+  /**
+   * Outer-glow mode replaces the older `glowOnActive` boolean.
+   *   "none"        – no glow
+   *   "active"      – glow only on the currently spoken word (default look)
+   *   "all"         – every word in the phrase glows continuously
+   * `glowOnActive: true` from older presets is treated as "active".
+   */
+  glowMode?: "none" | "active" | "all";
+  /** Glow halo color. Defaults to the active word's highlightColor. */
+  glowColor?: RGB;
+  /** Glow blur radius in pixels. Default 24 (matches existing renderer). */
+  glowBlur?: number;
   glowOnActive?: boolean;
   highlightGradient?: { from: RGB; to: RGB };
   boxBackground?: { color: RGB; paddingX: number; paddingY: number; radius: number };

@@ -56,6 +56,57 @@ export function WordCaption({ word, isActive, style }: Props) {
   const stroke = `${style.strokeWidth}px black`;
   const horizontalPosition = style.horizontalPosition ?? 0.5;
 
+  // Build textShadow as a list. Each effect is a separate shadow that
+  // CSS composes top-to-bottom (later layers under earlier layers).
+  // Order: drop shadow → glow (so glow is the outer halo).
+  const shadows: string[] = [];
+
+  // Drop shadow — uses shadowOpacity if no explicit color, else color directly.
+  if ((style.shadowOpacity ?? 0) > 0 || style.dropShadowColor) {
+    const sOX = style.dropShadowOffsetX ?? 0;
+    const sOY = style.dropShadowOffsetY ?? 4;
+    const sBlur = style.dropShadowBlur ?? 12;
+    const sColor = style.dropShadowColor
+      ? `rgba(${Math.round(style.dropShadowColor[0] * 255)}, ${Math.round(style.dropShadowColor[1] * 255)}, ${Math.round(style.dropShadowColor[2] * 255)}, ${style.shadowOpacity ?? 0.75})`
+      : `rgba(0, 0, 0, ${style.shadowOpacity})`;
+    shadows.push(`${sOX}px ${sOY}px ${sBlur}px ${sColor}`);
+  }
+
+  // Outer glow — controlled by glowMode (new) or glowOnActive (legacy).
+  const glowMode = style.glowMode ?? (style.glowOnActive ? "active" : "none");
+  const glowApplies =
+    glowMode === "all" || (glowMode === "active" && isActive);
+  if (glowApplies) {
+    const glowRGB = style.glowColor ?? style.highlightColor;
+    const glowBlur = style.glowBlur ?? 24;
+    const gColor = `rgba(${Math.round(glowRGB[0] * 255)}, ${Math.round(glowRGB[1] * 255)}, ${Math.round(glowRGB[2] * 255)}, 0.85)`;
+    // Two stacked shadows = denser, more visible halo.
+    shadows.push(`0 0 ${glowBlur}px ${gColor}`);
+    shadows.push(`0 0 ${Math.round(glowBlur / 2)}px ${gColor}`);
+  }
+
+  const composedTextShadow = shadows.length > 0 ? shadows.join(", ") : "none";
+
+  // Resolve text-property overrides. Defaults match the legacy hard-coded
+  // "uppercase + bold-900 + 0.01em letter-spacing" look so existing
+  // templates render unchanged when none of the new fields are set.
+  const textTransform =
+    style.textCase === "lower"
+      ? "lowercase"
+      : style.textCase === "sentence"
+        ? "none"
+        : "uppercase"; // default + style.textCase === "upper"
+  const fontWeight = style.bold === false ? 700 : 900;
+  const fontStyle = style.italic ? "italic" : "normal";
+  const textDecoration = style.underline ? "underline" : "none";
+  const letterSpacing =
+    typeof style.letterSpacing === "number"
+      ? `${style.letterSpacing}px`
+      : "0.01em";
+  // lineHeight only relevant when the word wraps — kept for parity with
+  // the phrase renderer so per-word and per-phrase paths agree.
+  const lineHeight = style.lineHeight ?? 1.2;
+
   return (
     <div
       style={{
@@ -66,13 +117,16 @@ export function WordCaption({ word, isActive, style }: Props) {
         opacity,
         fontFamily: style.fontFamily,
         fontSize: style.fontSize,
-        fontWeight: 900,
+        fontWeight,
+        fontStyle,
+        textDecoration,
         color,
         WebkitTextStroke: stroke,
-        textShadow: `0 4px 12px rgba(0, 0, 0, ${style.shadowOpacity})`,
+        textShadow: composedTextShadow,
         whiteSpace: "nowrap",
-        letterSpacing: "0.01em",
-        textTransform: "uppercase",
+        letterSpacing,
+        lineHeight,
+        textTransform,
       }}
     >
       {word.word}

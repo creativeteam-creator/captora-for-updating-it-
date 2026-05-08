@@ -15,6 +15,11 @@ interface Props {
   /** Phrase index in the timeline. Drives `verticalPositionCycle` so each
    *  phrase can land at a different Y. */
   phraseIndex?: number;
+  /** Per-word fontSize multipliers keyed by `(word.start * 100) | 0`
+   *  centiseconds. When a word's key is set, its rendered fontSize is
+   *  `style.fontSize * multiplier`. Words with no entry use the regular
+   *  fontSize. */
+  wordSizes?: Record<string, number>;
 }
 
 /**
@@ -27,7 +32,7 @@ interface Props {
  * are less noticeable than entrances, and a uniform exit keeps the rhythm
  * consistent across phrase transitions.
  */
-export function PhraseCaption({ words, phraseStartSec, style, variant = "pop", phraseIndex = 0 }: Props) {
+export function PhraseCaption({ words, phraseStartSec, style, variant = "pop", phraseIndex = 0, wordSizes }: Props) {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
 
@@ -101,7 +106,30 @@ export function PhraseCaption({ words, phraseStartSec, style, variant = "pop", p
 
   const opacity = entranceOpacity * exitOpacity;
 
-  const isUppercase = style.textCase === "upper";
+  // Text-property resolution. Defaults preserve the legacy
+  // "uppercase + bold-900 + 0.01em letter-spacing + lineHeight 1.05" look
+  // so untouched templates render identically. Per-style overrides:
+  //   textCase upper/lower/sentence
+  //   bold (true → 900, false → 700)
+  //   italic, underline
+  //   lineHeight, letterSpacing
+  //   textAlign left/center/right
+  const textTransform =
+    style.textCase === "lower"
+      ? "lowercase"
+      : style.textCase === "sentence"
+        ? "none"
+        : "uppercase";
+  const fontWeight = style.bold === false ? 700 : 900;
+  const fontStyle = style.italic ? "italic" : "normal";
+  const textDecoration = style.underline ? "underline" : "none";
+  const letterSpacing =
+    typeof style.letterSpacing === "number"
+      ? `${style.letterSpacing}px`
+      : "0.01em";
+  const lineHeight = style.lineHeight ?? 1.05;
+  const textAlign = style.textAlign ?? "center";
+
   const baseStroke = style.strokeWidth > 0 ? `${style.strokeWidth}px black` : "none";
   const baseColor = rgbToCss(style.baseColor);
   const highlightColor = rgbToCss(style.highlightColor);
@@ -115,9 +143,29 @@ export function PhraseCaption({ words, phraseStartSec, style, variant = "pop", p
       : style.verticalPosition;
   const horizontalPosition = style.horizontalPosition ?? 0.5;
 
+  // Build the phrase-level textShadow (drop shadow + optional "all-words" glow).
+  // The active-word glow is applied per-word inside the word loop below.
+  const phraseShadows: string[] = [];
+  if ((style.shadowOpacity ?? 0) > 0 || style.dropShadowColor) {
+    const sOX = style.dropShadowOffsetX ?? 0;
+    const sOY = style.dropShadowOffsetY ?? 4;
+    const sBlur = style.dropShadowBlur ?? 12;
+    const sColor = style.dropShadowColor
+      ? `rgba(${Math.round(style.dropShadowColor[0] * 255)}, ${Math.round(style.dropShadowColor[1] * 255)}, ${Math.round(style.dropShadowColor[2] * 255)}, ${style.shadowOpacity ?? 0.75})`
+      : `rgba(0, 0, 0, ${style.shadowOpacity})`;
+    phraseShadows.push(`${sOX}px ${sOY}px ${sBlur}px ${sColor}`);
+  }
+  const glowMode = style.glowMode ?? (style.glowOnActive ? "active" : "none");
+  if (glowMode === "all") {
+    const glowRGB = style.glowColor ?? style.highlightColor;
+    const glowBlur = style.glowBlur ?? 24;
+    const gColor = `rgba(${Math.round(glowRGB[0] * 255)}, ${Math.round(glowRGB[1] * 255)}, ${Math.round(glowRGB[2] * 255)}, 0.85)`;
+    phraseShadows.push(`0 0 ${glowBlur}px ${gColor}`);
+    phraseShadows.push(`0 0 ${Math.round(glowBlur / 2)}px ${gColor}`);
+  }
   const phraseTextShadow = style.boxBackground
     ? "none"
-    : `0 4px 12px rgba(0, 0, 0, ${style.shadowOpacity})`;
+    : phraseShadows.length > 0 ? phraseShadows.join(", ") : "none";
 
   const boxStyle: React.CSSProperties | undefined = style.boxBackground
     ? {
@@ -182,14 +230,16 @@ export function PhraseCaption({ words, phraseStartSec, style, variant = "pop", p
         opacity: phraseOpacity,
         fontFamily: style.fontFamily,
         fontSize: style.fontSize,
-        fontWeight: 900,
+        fontWeight,
+        fontStyle,
+        textDecoration,
         WebkitTextStroke: baseStroke,
         textShadow: phraseTextShadow,
-        letterSpacing: "0.01em",
-        textTransform: isUppercase ? "uppercase" : "none",
-        textAlign: "center",
+        letterSpacing,
+        textTransform,
+        textAlign,
         maxWidth: "85%",
-        lineHeight: 1.05,
+        lineHeight,
         display: "flex",
         flexDirection: "column",
         gap: "0.05em",
@@ -256,6 +306,15 @@ export function PhraseCaption({ words, phraseStartSec, style, variant = "pop", p
           .filter(Boolean)
           .join(" ");
 
+        // Per-word fontSize multiplier — keyed by `(word.start * 100) | 0`
+        // centiseconds. Default 1.0 = use the inherited phrase fontSize.
+        const wordKey = String((w.start * 100) | 0);
+        const wordSizeMul = wordSizes?.[wordKey];
+        const perWordFontSize =
+          typeof wordSizeMul === "number" && wordSizeMul > 0
+            ? style.fontSize * wordSizeMul
+            : undefined;
+
         const wordStyle: React.CSSProperties = {
           color: isActive ? highlightColor : inactiveColor,
           transform: composedTransform,
@@ -263,9 +322,21 @@ export function PhraseCaption({ words, phraseStartSec, style, variant = "pop", p
           display: "inline-block",
           opacity: wordEntrance.opacity,
           filter: wordEntrance.filter,
-          textShadow: isActive && style.glowOnActive
-            ? `0 0 18px ${highlightColor}, 0 0 6px ${highlightColor}`
-            : undefined,
+          // Per-word fontSize override (only set when a multiplier exists,
+          // otherwise the inherited fontSize wins).
+          fontSize: perWordFontSize,
+          // Active-word glow — only when glowMode is "active" (or legacy
+          // glowOnActive). The "all" mode is already applied at the phrase
+          // level above; "none" suppresses everything.
+          textShadow:
+            isActive && glowMode === "active"
+              ? (() => {
+                  const g = style.glowColor ?? style.highlightColor;
+                  const blur = style.glowBlur ?? 18;
+                  const c = `rgba(${Math.round(g[0] * 255)}, ${Math.round(g[1] * 255)}, ${Math.round(g[2] * 255)}, 0.9)`;
+                  return `0 0 ${blur}px ${c}, 0 0 ${Math.round(blur / 3)}px ${c}`;
+                })()
+              : undefined,
         };
 
         if (useGradient) {

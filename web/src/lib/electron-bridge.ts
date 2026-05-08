@@ -28,6 +28,12 @@ interface CaptoraBridge {
     ext: string,
     projectId: string
   ) => Promise<string>;
+  /** Read back a previously-saved source file for the renderer when
+   *  reopening a project. Throws if the file is missing on disk. */
+  readSourceFile?: (
+    projectId: string,
+    ext: string
+  ) => Promise<ArrayBuffer>;
   isDesktop: true;
 }
 
@@ -119,4 +125,31 @@ export async function saveSourceFileLocally(
     console.error("[saveSourceFileLocally] saveSourceFile threw:", err);
     throw err;
   }
+}
+
+/**
+ * Reopen a desktop-mode project's source file. Reads the bytes back
+ * from `<userData>/sessions/<projectId><ext>` via IPC and wraps them
+ * in a `File` so the editor can drive the Player like it does after
+ * an upload.
+ *
+ * Throws if the bridge isn't available OR the file was removed (the
+ * sessions cleanup sweep deletes files older than 12h). The caller
+ * should surface a "re-upload to restore" error in that case.
+ */
+export async function readSourceFileLocally(
+  projectId: string,
+  ext: string,
+  filename: string,
+  mimeType?: string
+): Promise<File> {
+  const bridge = getBridge();
+  if (!bridge?.readSourceFile) {
+    throw new Error(
+      "readSourceFileLocally called outside Electron desktop wrapper " +
+        "(or running an older build without the readSourceFile IPC)"
+    );
+  }
+  const buffer = await bridge.readSourceFile(projectId, ext);
+  return new File([buffer], filename, { type: mimeType || "" });
 }

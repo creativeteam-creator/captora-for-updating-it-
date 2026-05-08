@@ -53,6 +53,16 @@ jobs:
         # is more forgiving and still uses the lockfile when it matches.
         run: npm install --workspaces --include-workspace-root --no-audit --no-fund
 
+      - name: Install cross-arch Remotion compositor for Mac DMG
+        # The macOS runner is arm64. `npm install` only installs the
+        # arm64 compositor by default. Our build outputs both arm64 AND
+        # x64 DMGs, so we explicitly add the x64 binary too — without
+        # it, electron-builder's extraResources entry for x64 fails
+        # with ENOENT and the x64 DMG ships without a working
+        # /remotion executable.
+        if: runner.os == 'macOS'
+        run: npm install @remotion/compositor-darwin-x64 --no-save --no-audit --no-fund
+
       - name: Validate required secrets
         # Fails the build EARLY if any required secret is missing or
         # empty. Without this, the build proceeds with empty NEXT_PUBLIC_*

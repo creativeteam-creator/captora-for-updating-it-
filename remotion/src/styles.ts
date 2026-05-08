@@ -56,7 +56,35 @@ export interface CaptionStyle {
    */
   wordAnticipationSec?: number;
   /** Visual case applied to all words. */
-  textCase?: "upper" | "sentence";
+  textCase?: "upper" | "lower" | "sentence";
+  /** Additional bold ON TOP of the font's natural weight. Useful for
+   *  fonts like Inter/Montserrat with light defaults. */
+  bold?: boolean;
+  /** Italic / oblique style. */
+  italic?: boolean;
+  /** Underline decoration on every word. */
+  underline?: boolean;
+  /** Line-height multiplier for wrapped phrases. 1.0 = font default. */
+  lineHeight?: number;
+  /** Letter-spacing in pixels. Negative tightens, positive widens. */
+  letterSpacing?: number;
+  /** Paragraph alignment when phrase wraps to multiple lines. */
+  textAlign?: "left" | "center" | "right";
+  /** Custom drop-shadow tuning (replaces the implicit 0/4/12px-black). */
+  dropShadowColor?: RGB;
+  dropShadowBlur?: number;
+  dropShadowOffsetX?: number;
+  dropShadowOffsetY?: number;
+  /**
+   * Outer-glow mode (replaces the older `glowOnActive` boolean):
+   *   "none" / "active" / "all"
+   * `glowOnActive: true` is treated as "active".
+   */
+  glowMode?: "none" | "active" | "all";
+  /** Glow halo color. Defaults to highlightColor. */
+  glowColor?: RGB;
+  /** Glow blur radius in pixels. Default 24. */
+  glowBlur?: number;
   /** When true, the active word gets a coloured halo glow (textShadow). */
   glowOnActive?: boolean;
   /** Two-tone gradient on the active word — top → bottom of the glyph. */

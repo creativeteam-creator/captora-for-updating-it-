@@ -33,12 +33,12 @@ import {
 } from "@/lib/mediaDimensions";
 import { createClient } from "@/lib/supabase/client";
 import { uploadSourceFromBrowser } from "@/lib/supabase/storage";
-import { isElectron, saveSourceFileLocally } from "@/lib/electron-bridge";
+import { isElectron, readSourceFileLocally, saveSourceFileLocally } from "@/lib/electron-bridge";
 
 type Status =
   | { kind: "idle" }
-  | { kind: "uploading"; sizeMb: number }
-  | { kind: "transcribing" }
+  | { kind: "uploading"; sizeMb: number; startedAt: number }
+  | { kind: "transcribing"; startedAt: number; estimatedSec: number }
   | { kind: "opening"; project: ProjectRecord }
   | { kind: "transcribed"; project: ProjectRecord; file: File }
   | { kind: "rendering"; project: ProjectRecord; file: File }
@@ -94,6 +94,10 @@ export default function Home() {
    *  changes while line 3 is selected only touch line 3, even if
    *  line 5 happens to use the same preset. */
   const [lineOverrides, setLineOverrides] = useState<Record<string, CaptionStyleOverrides>>({});
+  /** Per-word fontSize multipliers keyed by `(word.start * 100) | 0`
+   *  centiseconds. 1.0 = use line / global fontSize, 1.5 = 150%. Edited
+   *  inline from CaptionsList, persisted with the project. */
+  const [wordSizes, setWordSizes] = useState<Record<string, number>>({});
   /** Currently-selected line in the timeline (centisecond key) — when
    *  set, picking a template applies to ONLY this line; when null,
    *  picking a template changes the project-wide `styleId`. */
@@ -238,7 +242,11 @@ export default function Home() {
     // Reflect the upload phase explicitly — for large files (clinic
     // network, slow upstream) this can take many minutes and the old
     // single "Transcribing…" message was misleading.
-    setStatus({ kind: "uploading", sizeMb: file.size / 1024 / 1024 });
+    setStatus({
+      kind: "uploading",
+      sizeMb: file.size / 1024 / 1024,
+      startedAt: Date.now(),
+    });
 
     try {
       // Generate thumbnail client-side so we don't pay for an extra
@@ -301,7 +309,17 @@ export default function Home() {
 
       // Upload finished — flip to the transcribing state so the
       // status panel updates from "Uploading…" to "Transcribing…".
-      setStatus({ kind: "transcribing" });
+      // Estimate transcription time from file size: GPU mode is ~5-10x
+      // realtime, cloud mode ~1-2x. Conservative ~6x realtime ≈ file
+      // size in MB / 6 minutes (audio: ~1MB per min, video: ~10MB per min).
+      // We use a simple "size / 4" as a rough seconds estimate that's
+      // visible early; if the real call takes longer the bar just slows.
+      const estimatedSec = Math.max(15, Math.round(file.size / 1024 / 1024 / 4 * 60));
+      setStatus({
+        kind: "transcribing",
+        startedAt: Date.now(),
+        estimatedSec,
+      });
 
       const res = await fetch("/api/transcribe", {
         method: "POST",
@@ -500,16 +518,37 @@ export default function Home() {
     setRenderError(null);
     setStatus({ kind: "opening", project });
     try {
-      if (!project.sourceUrl) {
-        throw new Error(
-          "Source file is missing from storage. Re-upload the same media to render."
-        );
-      }
-      const res = await fetch(project.sourceUrl);
-      if (!res.ok) throw new Error(`Source download failed: HTTP ${res.status}`);
-      const blob = await res.blob();
       const filename = `${project.title || "media"}${project.ext || ""}`;
-      const file = new File([blob], filename, { type: blob.type });
+      let file: File;
+
+      // Desktop projects don't upload to Supabase — the file lives at
+      // <userData>/sessions/<projectId>.<ext>. Read it back via IPC
+      // instead of fetching a non-existent signed URL.
+      if (isElectron()) {
+        try {
+          file = await readSourceFileLocally(
+            project.id,
+            project.ext || "",
+            filename
+          );
+        } catch (err) {
+          throw new Error(
+            (err instanceof Error ? err.message : String(err)) +
+              "\n\nTip: source files older than 12 hours are auto-cleaned. " +
+              "Re-upload the same media to restore this project."
+          );
+        }
+      } else {
+        if (!project.sourceUrl) {
+          throw new Error(
+            "Source file is missing from storage. Re-upload the same media to render."
+          );
+        }
+        const res = await fetch(project.sourceUrl);
+        if (!res.ok) throw new Error(`Source download failed: HTTP ${res.status}`);
+        const blob = await res.blob();
+        file = new File([blob], filename, { type: blob.type });
+      }
 
       // Re-probe dimensions when reopening — original aspect isn't
       // persisted on the project record (yet), so we derive from the
@@ -661,6 +700,8 @@ export default function Home() {
           onSelectLine={setSelectedLineKey}
           onPickTemplate={onPickTemplate}
           onClearLineStyle={onClearLineStyle}
+          wordSizes={wordSizes}
+          onWordSizesChange={setWordSizes}
         />
       </div>
     );
@@ -675,17 +716,21 @@ export default function Home() {
 
         <main className="flex-1 overflow-y-auto px-8 py-6">
           <UploadHero onFile={onFilePicked} disabled={uploading || transcribing || opening} />
-          {uploading && (
-            <div className="mt-4 flex items-center justify-center gap-3 rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] px-4 py-3 text-sm text-[var(--text-muted)]">
-              <span className="inline-block h-3 w-3 animate-pulse rounded-full bg-[var(--accent)]" />
-              Uploading source ({status.kind === "uploading" ? status.sizeMb.toFixed(0) : 0}&nbsp;MB) to storage… large files take a few minutes on slow networks.
-            </div>
+          {uploading && status.kind === "uploading" && (
+            <ProcessingBar
+              label={`Uploading source (${status.sizeMb.toFixed(0)} MB)…`}
+              hint="Large files take a few minutes on slow networks."
+              startedAt={status.startedAt}
+              estimatedSec={Math.max(5, Math.round(status.sizeMb / 5))}
+            />
           )}
-          {transcribing && (
-            <div className="mt-4 flex items-center justify-center gap-3 rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] px-4 py-3 text-sm text-[var(--text-muted)]">
-              <span className="inline-block h-3 w-3 animate-pulse rounded-full bg-[var(--accent)]" />
-              Transcribing… first call may download the model.
-            </div>
+          {transcribing && status.kind === "transcribing" && (
+            <ProcessingBar
+              label="Transcribing audio…"
+              hint="First run may download the Whisper model. GPU machines finish much faster."
+              startedAt={status.startedAt}
+              estimatedSec={status.estimatedSec}
+            />
           )}
           {opening && (
             <div className="mt-4 flex items-center justify-center gap-3 rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] px-4 py-3 text-sm text-[var(--text-muted)]">
@@ -714,4 +759,65 @@ export default function Home() {
       />
     </div>
   );
+}
+
+/**
+ * Live progress bar for upload + transcribe phases.
+ *
+ * We can't read true progress from a single fetch POST (no streaming
+ * endpoint), so we drive the bar from elapsed time vs the caller's
+ * `estimatedSec` budget. The asymptote at 95% prevents the bar from
+ * "completing" before the API responds — the parent flips state on
+ * fetch resolve and the bar disappears.
+ */
+function ProcessingBar({
+  label,
+  hint,
+  startedAt,
+  estimatedSec,
+}: {
+  label: string;
+  hint?: string;
+  startedAt: number;
+  estimatedSec: number;
+}) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(id);
+  }, []);
+
+  const elapsedSec = (now - startedAt) / 1000;
+  // Asymptotic curve to 95%: starts fast, slows as it approaches the
+  // estimate, never completes (parent component swaps the bar out on
+  // success). pct = 95 * (1 - exp(-elapsed / estimate)).
+  const ratio = Math.max(0.0001, estimatedSec);
+  const pct = Math.min(95, 95 * (1 - Math.exp(-elapsedSec / ratio)));
+  const eta = Math.max(0, estimatedSec - elapsedSec);
+
+  return (
+    <div className="mt-4 rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] p-4">
+      <div className="flex items-center justify-between text-sm text-[var(--text)]">
+        <span>{label}</span>
+        <span className="font-mono text-xs text-[var(--text-muted)]">
+          {Math.round(pct)}% &nbsp;·&nbsp; {formatSecs(elapsedSec)} elapsed
+          {eta > 0 ? <> · ~{formatSecs(eta)} left</> : null}
+        </span>
+      </div>
+      <div className="mt-2 h-2 overflow-hidden rounded-full bg-[var(--bg-hover)]">
+        <div
+          className="h-full rounded-full bg-[var(--accent)] transition-[width] duration-200 ease-out"
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      {hint && <div className="mt-1.5 text-[11px] text-[var(--text-muted)]">{hint}</div>}
+    </div>
+  );
+}
+
+function formatSecs(s: number): string {
+  const total = Math.max(0, Math.round(s));
+  const m = Math.floor(total / 60);
+  const sec = total % 60;
+  return m > 0 ? `${m}m${sec.toString().padStart(2, "0")}s` : `${sec}s`;
 }

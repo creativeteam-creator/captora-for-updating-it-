@@ -83,4 +83,13 @@ export interface CaptionsCompositionProps {
    */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   lineStyles?: Record<string, any>;
+  /**
+   * Per-word font-size multipliers keyed by the word's start time in
+   * centiseconds (`(word.start * 100) | 0` as a string — same convention
+   * as `lineAnimations` / `lineStyles`). 1.0 = use the line / global
+   * fontSize; 1.5 = 150%; 0.7 = 70%. Centisecond keys are stable across
+   * word edits (changing "transplantar" → "transplant" doesn't shift
+   * the start time) so the override survives caption tweaks.
+   */
+  wordSizes?: Record<string, number>;
 }

@@ -88,9 +88,16 @@ interface Props {
    *  on the project so picks survive page reloads. */
   lineAnimations?: Record<string, string>;
   onLineAnimationChange?: (key: string, variant: EntranceVariant | null) => void;
+  /** Per-word fontSize multipliers keyed by `(word.start * 100) | 0`
+   *  centiseconds. 1.0 = default, 1.5 = 150%. */
+  wordSizes?: Record<string, number>;
+  onWordSizesChange?: (next: Record<string, number>) => void;
 }
 
-export function CaptionsList({ words, onWordsChange, lineAnimations, onLineAnimationChange }: Props) {
+export function CaptionsList({
+  words, onWordsChange, lineAnimations, onLineAnimationChange,
+  wordSizes, onWordSizesChange,
+}: Props) {
   const lines = useMemo(() => groupWordsIntoLines(words), [words]);
   // Absolute index of the word currently in edit mode, or null when none.
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
@@ -310,9 +317,27 @@ export function CaptionsList({ words, onWordsChange, lineAnimations, onLineAnima
 
                     const baseCls =
                       "rounded-md px-2 py-0.5 text-xs cursor-text transition";
-                    return isKeyword ? (
+                    const wordKey = String((w.start * 100) | 0);
+                    const sizeMul = wordSizes?.[wordKey] ?? 1;
+                    const STEP = 0.15;
+                    const MIN = 0.5;
+                    const MAX = 2.5;
+                    const adjust = (delta: number) => {
+                      if (!onWordSizesChange) return;
+                      const next = Math.max(
+                        MIN,
+                        Math.min(MAX, Number((sizeMul + delta).toFixed(2)))
+                      );
+                      const updated = { ...(wordSizes ?? {}) };
+                      if (Math.abs(next - 1) < 0.001) {
+                        delete updated[wordKey];
+                      } else {
+                        updated[wordKey] = next;
+                      }
+                      onWordSizesChange(updated);
+                    };
+                    const wordSpan = isKeyword ? (
                       <span
-                        key={`${absoluteIdx}-${w.start}`}
                         onClick={() => beginEdit(absoluteIdx, w.word)}
                         className={`${baseCls} border border-[var(--accent)] bg-[var(--accent-bg)] font-medium text-[var(--accent)] hover:brightness-125`}
                       >
@@ -320,11 +345,54 @@ export function CaptionsList({ words, onWordsChange, lineAnimations, onLineAnima
                       </span>
                     ) : (
                       <span
-                        key={`${absoluteIdx}-${w.start}`}
                         onClick={() => beginEdit(absoluteIdx, w.word)}
                         className={`${baseCls} text-[var(--text)] hover:bg-[var(--bg-elevated)] hover:underline decoration-dotted underline-offset-2`}
                       >
                         {w.word}
+                      </span>
+                    );
+                    return (
+                      <span
+                        key={`${absoluteIdx}-${w.start}`}
+                        className="group/word relative inline-flex items-center gap-1"
+                      >
+                        {wordSpan}
+                        {/* Resize controls — visible on hover, OR always
+                            when a non-default multiplier is set so the user
+                            can revert easily. */}
+                        <span
+                          className={`inline-flex items-center gap-0.5 transition-opacity ${
+                            sizeMul !== 1
+                              ? "opacity-100"
+                              : "opacity-0 group-hover/word:opacity-100"
+                          }`}
+                        >
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); adjust(-STEP); }}
+                            disabled={sizeMul <= MIN + 0.001}
+                            className="flex h-4 w-4 items-center justify-center rounded border border-[var(--border-subtle)] text-[10px] leading-none text-[var(--text-muted)] hover:border-[var(--accent)] hover:text-[var(--text)] disabled:opacity-30"
+                            title="Shrink word"
+                          >
+                            −
+                          </button>
+                          <span
+                            className={`min-w-[26px] text-center text-[9px] tabular-nums ${
+                              sizeMul !== 1 ? "text-[var(--accent)]" : "text-[var(--text-muted)]"
+                            }`}
+                          >
+                            {Math.round(sizeMul * 100)}%
+                          </span>
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); adjust(STEP); }}
+                            disabled={sizeMul >= MAX - 0.001}
+                            className="flex h-4 w-4 items-center justify-center rounded border border-[var(--border-subtle)] text-[10px] leading-none text-[var(--text-muted)] hover:border-[var(--accent)] hover:text-[var(--text)] disabled:opacity-30"
+                            title="Enlarge word"
+                          >
+                            +
+                          </button>
+                        </span>
                       </span>
                     );
                   })}

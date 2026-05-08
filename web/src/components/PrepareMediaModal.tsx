@@ -114,7 +114,7 @@ export function PrepareMediaModal({ file, onClose, onGenerate }: Props) {
       onClick={onClose}
     >
       <div
-        className="relative w-full max-w-md overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--bg-sidebar)] shadow-2xl"
+        className="relative flex w-full max-w-md flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--bg-sidebar)] shadow-2xl max-h-[calc(100vh-2rem)]"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -166,8 +166,10 @@ export function PrepareMediaModal({ file, onClose, onGenerate }: Props) {
           </div>
         </div>
 
-        {/* Settings */}
-        <div className="space-y-4 p-6 pt-4">
+        {/* Settings — scrolls when the modal is taller than the viewport
+            (small laptops, half-size windows) so the Generate button in
+            the footer stays reachable without resizing the window. */}
+        <div className="flex-1 min-h-0 space-y-4 overflow-y-auto p-6 pt-4">
           <div className="flex items-center gap-2">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4 text-[var(--accent)]">
               <path d="M5 12h14M9 6l-4 6 4 6M15 6l4 6-4 6" strokeLinecap="round" strokeLinejoin="round" />
@@ -305,11 +307,15 @@ export function PrepareMediaModal({ file, onClose, onGenerate }: Props) {
             comingSoon
           />
 
+        </div>
+
+        {/* Sticky footer — always visible regardless of modal height. */}
+        <div className="border-t border-[var(--border)] p-4">
           <button
             type="button"
             disabled={!canGenerate}
             onClick={handleGenerate}
-            className="mt-2 flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-[var(--accent)] text-sm font-semibold text-white transition hover:bg-[var(--accent-hover)] disabled:cursor-not-allowed disabled:bg-[var(--bg-hover)] disabled:text-[var(--text-muted)]"
+            className="flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-[var(--accent)] text-sm font-semibold text-white transition hover:bg-[var(--accent-hover)] disabled:cursor-not-allowed disabled:bg-[var(--bg-hover)] disabled:text-[var(--text-muted)]"
           >
             Generate Transcription
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">

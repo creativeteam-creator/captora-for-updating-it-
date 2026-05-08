@@ -15,6 +15,10 @@ interface Props {
    *  overrides on the writer side). When a line has an entry, that
    *  style wins over the composition-level `style` prop. */
   lineStyles?: Record<string, CaptionStyle>;
+  /** Per-word fontSize multipliers keyed by `(word.start * 100) | 0`
+   *  centiseconds. Forwarded to PhraseCaption so it can resize specific
+   *  words inline without affecting the rest of the line. */
+  wordSizes?: Record<string, number>;
 }
 
 /** Build the centisecond key matching the writer side (page.tsx). */
@@ -87,7 +91,7 @@ function resolveLineStyle(
  * The cycling is deterministic, so re-rendering the same audio always
  * produces the same animation order — useful for previews matching MP4s.
  */
-export function CaptionsTimeline({ words, style, lineAnimations, lineStyles }: Props) {
+export function CaptionsTimeline({ words, style, lineAnimations, lineStyles, wordSizes }: Props) {
   const { fps } = useVideoConfig();
   const lines = groupWordsIntoLines(words);
 
@@ -132,6 +136,7 @@ export function CaptionsTimeline({ words, style, lineAnimations, lineStyles }: P
               style={lineStyle}
               variant={variant}
               phraseIndex={i}
+              wordSizes={wordSizes}
             />
           </Sequence>
         );

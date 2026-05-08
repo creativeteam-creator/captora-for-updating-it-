@@ -7,7 +7,7 @@ import { resolveSrc } from "../lib/resolveSrc";
 import { CaptionsCompositionProps } from "../types";
 
 export const TechMinimal: React.FC<CaptionsCompositionProps> = ({
-  words, videoSrc, audioSrc, style, transparentBackground, customFonts, lineAnimations, lineStyles,
+  words, videoSrc, audioSrc, style, transparentBackground, customFonts, lineAnimations, lineStyles, wordSizes,
 }) => {
   const finalStyle = style ?? CAPTION_STYLES["tech-minimal"];
   const showVideo = !transparentBackground && videoSrc;
@@ -25,6 +25,7 @@ export const TechMinimal: React.FC<CaptionsCompositionProps> = ({
         style={finalStyle}
         lineAnimations={lineAnimations}
         lineStyles={lineStyles}
+        wordSizes={wordSizes}
       />
     </AbsoluteFill>
   );

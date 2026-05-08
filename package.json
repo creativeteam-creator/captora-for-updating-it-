@@ -1,6 +1,6 @@
 {
   "name": "captora",
-  "version": "1.0.15",
+  "version": "1.0.16",
   "private": true,
   "description": "Captora — viral-style auto-captions. Web app + Remotion renderer + Electron desktop wrapper.",
   "main": "electron/dist/main.js",
@@ -69,10 +69,6 @@
       {
         "from": "scripts",
         "to": "scripts"
-      },
-      {
-        "from": "node_modules/@remotion/compositor-win32-x64-msvc",
-        "to": "web/.next/standalone/node_modules/@remotion/compositor-win32-x64-msvc"
       }
     ],
     "win": {
@@ -85,7 +81,13 @@
         }
       ],
       "icon": "resources/icon.ico",
-      "publisherName": "QHT Clinic"
+      "publisherName": "QHT Clinic",
+      "extraResources": [
+        {
+          "from": "node_modules/@remotion/compositor-win32-x64-msvc",
+          "to": "web/.next/standalone/node_modules/@remotion/compositor-win32-x64-msvc"
+        }
+      ]
     },
     "nsis": {
       "oneClick": false,
@@ -108,7 +110,17 @@
       "identity": null,
       "gatekeeperAssess": false,
       "hardenedRuntime": false,
-      "type": "distribution"
+      "type": "distribution",
+      "extraResources": [
+        {
+          "from": "node_modules/@remotion/compositor-darwin-arm64",
+          "to": "web/.next/standalone/node_modules/@remotion/compositor-darwin-arm64"
+        },
+        {
+          "from": "node_modules/@remotion/compositor-darwin-x64",
+          "to": "web/.next/standalone/node_modules/@remotion/compositor-darwin-x64"
+        }
+      ]
     },
     "dmg": {
       "writeUpdateInfo": true,

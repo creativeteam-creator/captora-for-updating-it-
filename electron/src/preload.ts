@@ -62,6 +62,17 @@ contextBridge.exposeInMainWorld("captora", {
       projectId,
     }),
 
+  /** Read back a previously-saved local source file when the user
+   *  reopens a desktop project. Returns the bytes as ArrayBuffer so
+   *  the renderer can wrap them in a `File` for the editor. Throws
+   *  if the file was deleted (sessions cleanup sweep, manual
+   *  removal, etc.) — caller should fall back to a friendly error. */
+  readSourceFile: (
+    projectId: string,
+    ext: string
+  ): Promise<ArrayBuffer> =>
+    ipcRenderer.invoke("captora:readSourceFile", { projectId, ext }),
+
   /** Tells the renderer it's running inside the desktop wrapper —
    *  flips small UI bits (e.g. show "Open output folder" instead
    *  of "Download" after render). */

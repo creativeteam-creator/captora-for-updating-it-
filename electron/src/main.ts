@@ -20,7 +20,7 @@
  */
 
 import { app, BrowserWindow, ipcMain, dialog, shell } from "electron";
-import { writeFile, mkdir, copyFile, appendFile, utimes } from "fs/promises";
+import { writeFile, mkdir, copyFile, appendFile, utimes, readFile } from "fs/promises";
 import { existsSync, statSync } from "fs";
 import { join } from "path";
 import { startNextServer, stopNextServer } from "./nextServer";
@@ -237,6 +237,42 @@ ipcMain.handle(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       ipcLog(`copySourceFile FAILED ${msg}`);
+      throw err;
+    }
+  }
+);
+
+/**
+ * Read a previously-saved source file back into the renderer when the
+ * user reopens a project. Desktop projects skip the Supabase upload, so
+ * the file lives only at `<userData>/sessions/<projectId>.<ext>`. This
+ * handler resolves that path, reads the bytes, and returns an
+ * ArrayBuffer the renderer wraps in a `File` for the editor.
+ *
+ * Throws if the file is missing — caller surfaces a friendly "Source
+ * file is missing" message and asks the user to re-upload.
+ */
+ipcMain.handle(
+  "captora:readSourceFile",
+  async (_e, payload: { projectId: string; ext: string }) => {
+    const sessionsDir = join(app.getPath("userData"), "sessions");
+    const filePath = join(sessionsDir, `${payload.projectId}${payload.ext}`);
+    ipcLog(`readSourceFile entered projectId=${payload.projectId} ext=${payload.ext} path=${filePath}`);
+    if (!existsSync(filePath)) {
+      ipcLog(`readSourceFile MISSING ${filePath}`);
+      throw new Error(
+        `Source not found at ${filePath}. The file may have been deleted by the cleanup sweep — re-upload to restore.`
+      );
+    }
+    try {
+      const bytes = await readFile(filePath);
+      ipcLog(`readSourceFile OK size=${bytes.byteLength}`);
+      // Return as ArrayBuffer so the renderer can `new File([buf], ...)`
+      // without an extra copy. Buffer is a Uint8Array under the hood.
+      return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      ipcLog(`readSourceFile FAILED ${msg}`);
       throw err;
     }
   }
