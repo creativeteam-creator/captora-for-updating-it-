@@ -34,7 +34,38 @@ const nextConfig = {
     "ffmpeg-static",
     "@remotion/bundler",
     "@remotion/renderer",
+    "remotion",
   ],
+  // Force the standalone tracer to bundle Remotion's runtime deep
+  // dependencies. `serverExternalPackages` keeps them as require()'d
+  // modules at runtime, but the tracer still skips packages that are
+  // only loaded via `import("...")` strings inside @remotion/bundler
+  // (esbuild plugins, execa, react-dom). Without these include rules
+  // the packaged build hits MODULE_NOT_FOUND mid-render.
+  outputFileTracingIncludes: {
+    "/api/render": [
+      "../node_modules/remotion/**",
+      "../node_modules/@remotion/**",
+      "../node_modules/esbuild/**",
+      "../node_modules/@esbuild/**",
+      "../node_modules/execa/**",
+      "../node_modules/cross-spawn/**",
+      "../node_modules/which/**",
+      "../node_modules/get-stream/**",
+      "../node_modules/human-signals/**",
+      "../node_modules/is-stream/**",
+      "../node_modules/merge-stream/**",
+      "../node_modules/npm-run-path/**",
+      "../node_modules/onetime/**",
+      "../node_modules/mimic-fn/**",
+      "../node_modules/signal-exit/**",
+      "../node_modules/strip-final-newline/**",
+      "../node_modules/path-key/**",
+      "../node_modules/shebang-command/**",
+      "../node_modules/shebang-regex/**",
+      "../node_modules/isexe/**",
+    ],
+  },
 };
 
 module.exports = nextConfig;
