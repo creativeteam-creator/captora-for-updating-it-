@@ -149,40 +149,58 @@ jobs:
         # electron-builder packs.
         run: npm run build:web
 
-      - name: Pre-stage Remotion compositor binaries into Next.js standalone
-        # `@remotion/compositor-<platform>-<arch>` packages ship native
-        # binaries (`remotion`, `ffmpeg`, `ffprobe`) plus platform
-        # DLLs / dylibs. Next.js's standalone tracer copies their JS
-        # shims but not the native executables. We merge them in here
-        # with `cp -rn` (no-clobber): files Next.js already placed stay
-        # put, missing binaries get filled in. Same code path for Mac
-        # and Windows.
+      - name: Pre-stage Remotion runtime + compositor binaries into standalone
+        # Next.js's standalone tracer follows static imports but misses:
+        #   - native compositor binaries (`remotion`, `ffmpeg`, `ffprobe`)
+        #     because they aren't `require()`'d as JS
+        #   - `@remotion/bundler` and its esbuild deps because /api/render
+        #     loads them dynamically at runtime via `import("@remotion/bundler")`,
+        #     and Next.js skips dynamic imports when tracing.
+        #
+        # We resolve both by copying every @remotion/* folder from
+        # node_modules into the standalone tree with `cp -Rn`
+        # (no-clobber) — files Next.js already placed stay put, missing
+        # ones get filled in. Cheap (~50 MB), deterministic, and works
+        # the same on Mac + Windows runners.
         shell: bash
         run: |
           set -e
-          STANDALONE=web/.next/standalone/node_modules/@remotion
-          mkdir -p "$STANDALONE"
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            COMPOSITORS="compositor-win32-x64-msvc"
-          else
-            COMPOSITORS="compositor-darwin-arm64 compositor-darwin-x64"
+          STANDALONE_NM=web/.next/standalone/node_modules
+          mkdir -p "$STANDALONE_NM/@remotion"
+
+          # 1. @remotion/* packages — compositor binaries + bundler + renderer
+          if [ -d node_modules/@remotion ]; then
+            for pkg in node_modules/@remotion/*/; do
+              name=$(basename "$pkg")
+              dst="$STANDALONE_NM/@remotion/$name"
+              echo "Staging @remotion/$name → $dst"
+              mkdir -p "$dst"
+              cp -Rn "$pkg"/. "$dst"/ 2>/dev/null || cp -R "$pkg"/. "$dst"/
+            done
           fi
-          for c in $COMPOSITORS; do
-            SRC="node_modules/@remotion/$c"
-            DST="$STANDALONE/$c"
-            if [ -d "$SRC" ]; then
-              echo "Staging $c → $DST"
-              mkdir -p "$DST"
-              # `cp -rn` (no-clobber) leaves Next.js-traced files alone
-              # and only fills in what's missing. BSD `cp -n` accepts
-              # the same flag so this works on macOS runners too.
-              cp -Rn "$SRC"/. "$DST"/ 2>/dev/null || cp -R "$SRC"/. "$DST"/
-              echo "Files in $DST:"
-              ls "$DST" | head -10
-            else
-              echo "Skipping $c (not installed in node_modules)"
-            fi
-          done
+
+          # 2. esbuild — required by @remotion/bundler at runtime
+          if [ -d node_modules/esbuild ]; then
+            echo "Staging esbuild"
+            mkdir -p "$STANDALONE_NM/esbuild"
+            cp -Rn node_modules/esbuild/. "$STANDALONE_NM/esbuild"/ 2>/dev/null || \
+              cp -R node_modules/esbuild/. "$STANDALONE_NM/esbuild"/
+          fi
+          # esbuild ships platform-native binaries via @esbuild/<platform>-<arch>
+          if [ -d node_modules/@esbuild ]; then
+            mkdir -p "$STANDALONE_NM/@esbuild"
+            for pkg in node_modules/@esbuild/*/; do
+              name=$(basename "$pkg")
+              dst="$STANDALONE_NM/@esbuild/$name"
+              echo "Staging @esbuild/$name"
+              mkdir -p "$dst"
+              cp -Rn "$pkg"/. "$dst"/ 2>/dev/null || cp -R "$pkg"/. "$dst"/
+            done
+          fi
+
+          echo ""
+          echo "@remotion contents in standalone:"
+          ls "$STANDALONE_NM/@remotion" 2>/dev/null || echo "  (empty)"
 
       - name: Build Electron + installer + publish
         env:
