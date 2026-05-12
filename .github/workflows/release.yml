@@ -210,17 +210,26 @@ jobs:
 
           # 4. execa + its full dependency tree — @remotion/renderer imports
           # execa via deep ESM import which Next.js's tracer often misses.
+          # 5. ffmpeg-static — ships a platform-native ffmpeg binary that
+          # the trace skips (it's not JS). Used by audio-extract.ts to
+          # pull MP3 audio from video before cloud STT, and by whisper.ts
+          # for local CPU Whisper's audio decoding.
           # Belt-and-suspenders: stage all transitives we've seen at runtime.
           for pkg in execa cross-spawn which path-key get-stream human-signals \
                       is-stream merge-stream npm-run-path mimic-fn onetime \
                       signal-exit strip-final-newline shebang-command \
-                      shebang-regex isexe; do
+                      shebang-regex isexe \
+                      ffmpeg-static; do
             SRC="node_modules/$pkg"
             DST="$STANDALONE_NM/$pkg"
             if [ -d "$SRC" ]; then
               echo "Staging $pkg"
               mkdir -p "$DST"
               cp -Rn "$SRC"/. "$DST"/ 2>/dev/null || cp -R "$SRC"/. "$DST"/
+              # ffmpeg-static needs its binary executable on Mac/Linux
+              if [ "$pkg" = "ffmpeg-static" ] && [ "$RUNNER_OS" != "Windows" ]; then
+                find "$DST" -type f -name 'ffmpeg' -exec chmod +x {} \; 2>/dev/null || true
+              fi
             fi
           done
 

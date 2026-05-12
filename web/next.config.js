@@ -64,6 +64,15 @@ const nextConfig = {
       "../node_modules/shebang-command/**",
       "../node_modules/shebang-regex/**",
       "../node_modules/isexe/**",
+      "../node_modules/ffmpeg-static/**",
+    ],
+    "/api/transcribe": [
+      // ffmpeg-static ships a native binary used for audio extraction
+      // before cloud STT (audio-extract.ts) and for local CPU Whisper's
+      // PCM decoding (whisper.ts). The tracer misses the binary on Mac
+      // because it's not a JS require target — force-include the whole
+      // package so the executable lands in standalone.
+      "../node_modules/ffmpeg-static/**",
     ],
   },
 };
