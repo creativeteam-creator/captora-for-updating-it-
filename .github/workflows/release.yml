@@ -208,9 +208,28 @@ jobs:
             done
           fi
 
+          # 4. execa + its full dependency tree — @remotion/renderer imports
+          # execa via deep ESM import which Next.js's tracer often misses.
+          # Belt-and-suspenders: stage all transitives we've seen at runtime.
+          for pkg in execa cross-spawn which path-key get-stream human-signals \
+                      is-stream merge-stream npm-run-path mimic-fn onetime \
+                      signal-exit strip-final-newline shebang-command \
+                      shebang-regex isexe; do
+            SRC="node_modules/$pkg"
+            DST="$STANDALONE_NM/$pkg"
+            if [ -d "$SRC" ]; then
+              echo "Staging $pkg"
+              mkdir -p "$DST"
+              cp -Rn "$SRC"/. "$DST"/ 2>/dev/null || cp -R "$SRC"/. "$DST"/
+            fi
+          done
+
           echo ""
           echo "@remotion contents in standalone:"
           ls "$STANDALONE_NM/@remotion" 2>/dev/null || echo "  (empty)"
+          echo ""
+          echo "execa in standalone:"
+          ls "$STANDALONE_NM/execa" 2>/dev/null | head -5 || echo "  (missing)"
 
       - name: Build Electron + installer + publish
         env:
