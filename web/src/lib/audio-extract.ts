@@ -19,8 +19,15 @@ import ffmpegPath from "ffmpeg-static";
  * its path. The caller is responsible for `unlink`-ing the temp file
  * when done (use a try/finally — the file lives in the OS temp dir,
  * but we still clean up to avoid pile-up across long sessions).
+ *
+ * `bitrate` defaults to 128k — high quality, fine for ElevenLabs whose
+ * upload limit is roomy. Pass "48k" or "64k" when targeting Groq, whose
+ * hard request-size cap is ~25 MB.
  */
-export async function extractAudioToMp3(inputPath: string): Promise<string> {
+export async function extractAudioToMp3(
+  inputPath: string,
+  bitrate: string = "128k"
+): Promise<string> {
   if (!ffmpegPath) {
     throw new Error("ffmpeg-static did not provide a binary path for this platform");
   }
@@ -33,7 +40,7 @@ export async function extractAudioToMp3(inputPath: string): Promise<string> {
       "-i", inputPath,
       "-vn",                // strip video
       "-acodec", "libmp3lame",
-      "-b:a", "128k",       // 128 kbps — overkill for STT, still 30 MB / 30 min
+      "-b:a", bitrate,      // 128k for ElevenLabs (high quality), 48k for Groq (size-capped)
       "-ar", "16000",       // 16 kHz — Whisper / Scribe internal rate
       "-ac", "1",           // mono
       outputPath,

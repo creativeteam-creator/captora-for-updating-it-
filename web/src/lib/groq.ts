@@ -12,11 +12,27 @@
  * mapping is straightforward.
  */
 
-import { readFile } from "fs/promises";
+import { readFile, stat, unlink } from "fs/promises";
 import { basename } from "path";
 import type { WhisperResult, WhisperWord } from "./whisper";
+import { extractAudioToMp3 } from "./audio-extract";
 
 const GROQ_BASE = "https://api.groq.com/openai/v1";
+
+/**
+ * Groq's audio API hard-rejects requests above ~25 MB with a 413 Payload
+ * Too Large from their Cloudflare edge — confirmed in the wild on a
+ * 955 MB mp4 upload that never reached the inference server. For
+ * anything that crosses ~22 MB we pre-extract a 48 kbps mono 16 kHz
+ * MP3 (plenty for Whisper-grade STT) before uploading.
+ *
+ * At 48 kbps that's ~360 KB/min of audio, so a 60-min video → ~21 MB
+ * extracted, still under the cap. Beyond ~70 min of audio we fail
+ * fast on upload — the router falls through to local-whisper for
+ * those edge cases.
+ */
+const EXTRACT_AUDIO_THRESHOLD_BYTES = 22_000_000;
+const GROQ_EXTRACT_BITRATE = "48k";
 
 /**
  * Map our spokenLanguage to Whisper's ISO 639-1 code. Groq accepts both
@@ -57,60 +73,91 @@ export async function transcribeWithGroq(opts: GroqOptions): Promise<WhisperResu
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) throw new Error("GROQ_API_KEY not set");
 
-  const audioBuf = await readFile(opts.filePath);
-  const blob = new Blob([new Uint8Array(audioBuf)]);
-  const filename = basename(opts.filePath) || "audio.mp3";
-
-  const form = new FormData();
-  form.append("file", blob, filename);
-  // Turbo is the best speed/quality trade for our use; large-v3 is also
-  // available if hallucinations show up on tricky audio.
-  form.append("model", "whisper-large-v3-turbo");
-  form.append("response_format", "verbose_json");
-  form.append("timestamp_granularities[]", "word");
-  form.append("temperature", "0");
-
-  // Translation endpoint always outputs English; for it we don't pass a
-  // source language hint (Whisper auto-detects).
-  if (!opts.translateToEnglish) {
-    const iso = ISO_CODE[opts.spokenLanguage];
-    if (iso) form.append("language", iso);
+  // Decide whether to upload the original or pre-extract audio. Groq's
+  // edge rejects anything above ~25 MB with 413, so for bigger inputs
+  // we transcode to a small mono MP3 first and clean it up after.
+  const fileSize = (await stat(opts.filePath)).size;
+  let uploadPath = opts.filePath;
+  let extractedTempPath: string | null = null;
+  if (fileSize > EXTRACT_AUDIO_THRESHOLD_BYTES) {
+    console.log(
+      `[groq] file size ${(fileSize / 1e6).toFixed(1)}MB exceeds ` +
+      `${(EXTRACT_AUDIO_THRESHOLD_BYTES / 1e6).toFixed(0)}MB threshold — extracting audio first`
+    );
+    extractedTempPath = await extractAudioToMp3(opts.filePath, GROQ_EXTRACT_BITRATE);
+    uploadPath = extractedTempPath;
+    const newSize = (await stat(uploadPath)).size;
+    console.log(`[groq] extracted audio: ${(newSize / 1e6).toFixed(1)} MB`);
   }
 
-  const endpoint = opts.translateToEnglish
-    ? `${GROQ_BASE}/audio/translations`
-    : `${GROQ_BASE}/audio/transcriptions`;
-
-  const t0 = Date.now();
-  console.log(`[groq] POST ${endpoint} lang=${opts.spokenLanguage} translate=${opts.translateToEnglish}`);
-
-  // 60s timeout so a firewall-blocked multipart upload fails fast and the
-  // router can fall back instead of hanging the whole API request.
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 60_000);
-
-  let resp: Response;
   try {
-    resp = await fetch(endpoint, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}` },
-      body: form,
-      signal: ctrl.signal,
-    });
-  } catch (err) {
-    if ((err as Error).name === "AbortError") {
-      throw new Error(`Groq request timed out after 60s (firewall / network)`);
+    const audioBuf = await readFile(uploadPath);
+    const blob = new Blob([new Uint8Array(audioBuf)]);
+    const filename = basename(uploadPath) || "audio.mp3";
+
+    const form = new FormData();
+    form.append("file", blob, filename);
+    // Turbo is the best speed/quality trade for our use; large-v3 is also
+    // available if hallucinations show up on tricky audio.
+    form.append("model", "whisper-large-v3-turbo");
+    form.append("response_format", "verbose_json");
+    form.append("timestamp_granularities[]", "word");
+    form.append("temperature", "0");
+
+    // Translation endpoint always outputs English; for it we don't pass a
+    // source language hint (Whisper auto-detects).
+    if (!opts.translateToEnglish) {
+      const iso = ISO_CODE[opts.spokenLanguage];
+      if (iso) form.append("language", iso);
     }
-    throw err;
+
+    const endpoint = opts.translateToEnglish
+      ? `${GROQ_BASE}/audio/translations`
+      : `${GROQ_BASE}/audio/transcriptions`;
+
+    const t0 = Date.now();
+    console.log(`[groq] POST ${endpoint} lang=${opts.spokenLanguage} translate=${opts.translateToEnglish}`);
+
+    // 60s timeout so a firewall-blocked multipart upload fails fast and the
+    // router can fall back instead of hanging the whole API request.
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 60_000);
+
+    let resp: Response;
+    try {
+      resp = await fetch(endpoint, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${apiKey}` },
+        body: form,
+        signal: ctrl.signal,
+      });
+    } catch (err) {
+      if ((err as Error).name === "AbortError") {
+        throw new Error(`Groq request timed out after 60s (firewall / network)`);
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
+
+    if (!resp.ok) {
+      const errBody = await resp.text();
+      throw new Error(`Groq ${resp.status}: ${errBody.slice(0, 300)}`);
+    }
+
+    return await parseGroqResponse(resp, opts, t0);
   } finally {
-    clearTimeout(timer);
+    if (extractedTempPath) {
+      try { await unlink(extractedTempPath); } catch { /* best-effort cleanup */ }
+    }
   }
+}
 
-  if (!resp.ok) {
-    const errBody = await resp.text();
-    throw new Error(`Groq ${resp.status}: ${errBody.slice(0, 300)}`);
-  }
-
+async function parseGroqResponse(
+  resp: Response,
+  opts: GroqOptions,
+  t0: number
+): Promise<WhisperResult> {
   const data = (await resp.json()) as GroqResponse;
   console.log(`[groq] ok in ${Date.now() - t0}ms — words=${data.words?.length ?? 0} duration=${data.duration}s`);
 

@@ -18,12 +18,19 @@ import type { WhisperResult, WhisperWord } from "./whisper";
 import { extractAudioToMp3 } from "./audio-extract";
 
 /**
- * Files above ~1.5 GB hit Node's `fs.readFile` 2 GiB hard limit and also
- * exceed ElevenLabs's per-request size cap. For anything that big we
- * extract a compressed audio track first (ffmpeg → 128 kbps mono 16 kHz
- * MP3) and upload that instead. ~30 MB / 30 min audio.
+ * Files above ~40 MB get the audio-only treatment: we pre-extract a
+ * 128 kbps mono 16 kHz MP3 and upload that instead of the original
+ * video container. Two wins:
+ *   - Avoids minutes of HTTP upload latency that hit the 5-min ABORT
+ *     ceiling on bigger video files (the 955 MB upload on Mac mini that
+ *     timed out before the request even finished streaming).
+ *   - Keeps us comfortably below ElevenLabs's documented upload caps.
+ *
+ * 40 MB chosen as the cutoff because a 10-min 1080p clip is roughly
+ * that size — short content uploads fast enough to skip the extract
+ * round-trip, longer content always extracts first.
  */
-const EXTRACT_AUDIO_THRESHOLD_BYTES = 1_500_000_000;
+const EXTRACT_AUDIO_THRESHOLD_BYTES = 40_000_000;
 
 const ELEVENLABS_BASE = "https://api.elevenlabs.io/v1";
 
