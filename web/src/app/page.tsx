@@ -443,7 +443,15 @@ export default function Home() {
         const sid = (lineStyles[k] ?? styleId) as CaptionStyleId;
         const preset = CAPTION_STYLES[sid];
         if (preset) {
-          computedLineStyles[k] = applyStyleOverrides(preset, lineOverrides[k] ?? {});
+          // Per-line lines inherit the GLOBAL overrides first (font,
+          // color, position etc.) and then layer any per-line overrides
+          // on top. Without this merge, picking a different template
+          // for one line dropped all the user's global tweaks — the
+          // "template change keeps undoing my customizations" bug.
+          computedLineStyles[k] = applyStyleOverrides(preset, {
+            ...overrides,
+            ...(lineOverrides[k] ?? {}),
+          });
         }
       }
       // Render uses the latest edited words, not the originals from the
@@ -609,17 +617,15 @@ export default function Home() {
     });
   };
 
-  // Selection-aware overrides setter. When a line is selected, every
-  // Text-panel edit goes into that line's `lineOverrides[key]` slot
-  // — keeping per-line independence. Otherwise edits land in the
-  // project-wide `overrides` as before.
+  // Text-panel edits always update the GLOBAL overrides — line selection
+  // no longer scopes slider/colour/font changes to one line. Per-line
+  // styling is now expressed only through template selection (a line can
+  // pick a different template via the Templates panel while selected,
+  // and that line's render inherits the global overrides on top — see
+  // computedLineStyles in onRender).
   const onOverridesChange = (next: CaptionStyleOverrides) => {
     recordEditorChange();
-    if (selectedLineKey) {
-      setLineOverrides((prev) => ({ ...prev, [selectedLineKey]: next }));
-    } else {
-      setOverrides(next);
-    }
+    setOverrides(next);
   };
 
   const onWordsChange = (next: WhisperWord[]) => {
@@ -670,9 +676,13 @@ export default function Home() {
           // own overrides + that line's own template ID so the
           // sliders reflect what the user is actually editing.
           // Otherwise we hand it the project-wide ones.
-          overrides={
-            selectedLineKey ? lineOverrides[selectedLineKey] ?? {} : overrides
-          }
+          // TextPanel ALWAYS edits the global overrides — even when a line
+          // is selected. Previously, clicking a line silently swapped the
+          // panel into per-line mode showing an empty `lineOverrides[key]`
+          // snapshot, so users perceived their customizations as "reset"
+          // every time they clicked a line. Per-line scoping is now limited
+          // to template selection only (Templates panel + selectedLineKey).
+          overrides={overrides}
           editingStyleId={
             (selectedLineKey
               ? lineStyles[selectedLineKey]

@@ -293,7 +293,13 @@ export function EditorView({
     const sid = (lineStyles[k] ?? styleId) as CaptionStyleId;
     const preset = CAPTION_STYLES[sid];
     if (preset) {
-      computedLineStyles[k] = applyStyleOverrides(preset, lineOverrides[k] ?? {});
+      // Per-line styled lines INHERIT the global overrides (font,
+      // colour, position…) first, then layer their own overrides on
+      // top. Preview must mirror what onRender / api/render produces.
+      computedLineStyles[k] = applyStyleOverrides(preset, {
+        ...overrides,
+        ...(lineOverrides[k] ?? {}),
+      });
     }
   }
 

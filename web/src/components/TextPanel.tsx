@@ -156,6 +156,12 @@ export function TextPanel({ base, overrides, onChange, onReset, userFonts, onUse
         setUploadStatus({ kind: "idle" });
         set("fontFamily", `'${uploaded.family}', ${matchFontStack(merged.fontFamily)}`);
       } catch (err) {
+        // Log the full error so users can copy it from DevTools when
+        // reporting "fonts don't import" — the visible UI message is
+        // often truncated. Likely culprits surface here: missing
+        // `user_fonts` table, RLS policy blocking insert, bucket
+        // not created, or auth session expired.
+        console.error("[TextPanel] font upload failed", err);
         const message = err instanceof Error ? err.message : "Upload failed";
         setUploadStatus({ kind: "error", message });
       }
@@ -193,7 +199,7 @@ export function TextPanel({ base, overrides, onChange, onReset, userFonts, onUse
           if (!firstUploaded) firstUploaded = u;
         } catch (err) {
           errors++;
-          console.warn(`upload failed for ${file.name}:`, err);
+          console.error(`[TextPanel] upload failed for ${file.name}:`, err);
         }
       }
       await onUserFontsChanged();
@@ -276,16 +282,32 @@ export function TextPanel({ base, overrides, onChange, onReset, userFonts, onUse
             {presets.length > 0 && (
               <div className="flex flex-wrap gap-1">
                 {presets.map((p) => (
-                  <button
+                  // Pill = APPLY on click; the small × on the right
+                  // deletes. Earlier the whole pill called delete which
+                  // silently nuked the user's saved preset every time
+                  // they tried to "apply" it.
+                  <span
                     key={p.id}
-                    type="button"
-                    onClick={() => handleDeletePreset(p)}
-                    className="group inline-flex items-center gap-1 rounded-full border border-[var(--border-subtle)] px-2 py-0.5 text-[10px] text-[var(--text-muted)] hover:border-red-400 hover:text-red-400"
-                    title={`Delete "${p.name}"`}
+                    className="inline-flex items-center rounded-full border border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[10px] text-[var(--text-muted)]"
                   >
-                    <span>{p.name}</span>
-                    <span className="opacity-50 group-hover:opacity-100">×</span>
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => handleApplyPreset(p)}
+                      className="rounded-l-full px-2 py-0.5 hover:bg-[var(--bg-hover)] hover:text-[var(--text)]"
+                      title={`Apply "${p.name}"`}
+                    >
+                      {p.name}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeletePreset(p)}
+                      className="rounded-r-full border-l border-[var(--border-subtle)] px-1.5 py-0.5 opacity-60 hover:bg-red-500/10 hover:text-red-400 hover:opacity-100"
+                      title={`Delete "${p.name}"`}
+                      aria-label={`Delete ${p.name}`}
+                    >
+                      ×
+                    </button>
+                  </span>
                 ))}
               </div>
             )}
