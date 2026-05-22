@@ -172,14 +172,25 @@ async function parseAndReturn(
   );
 
   const words: WhisperWord[] = [];
+  let dropped = 0;
   for (const w of wordEntries) {
     const text = (w.text ?? "").trim();
     if (!text) continue;
-    words.push({
-      word: text,
-      start: typeof w.start === "number" ? w.start : 0,
-      end: typeof w.end === "number" ? w.end : 0,
-    });
+    const start = typeof w.start === "number" ? w.start : 0;
+    const end = typeof w.end === "number" ? w.end : 0;
+    // Drop hallucinated / junk entries that ElevenLabs returns during
+    // music or silence sections. Symptoms in the wild:
+    //   - end <= start  (impossible duration)
+    //   - end - start < 30ms (no real spoken word is this short; these
+    //     are usually marker tokens emitted during background music or
+    //     coughs; they cluster at one timestamp and form a 70-word
+    //     "phrase" that fills the entire preview frame as a text wall)
+    if (end <= start) { dropped++; continue; }
+    if (end - start < 0.03) { dropped++; continue; }
+    words.push({ word: text, start, end });
+  }
+  if (dropped > 0) {
+    console.log(`[elevenlabs] dropped ${dropped} hallucinated/zero-duration word(s)`);
   }
 
   const duration = words.length ? words[words.length - 1].end : 0;

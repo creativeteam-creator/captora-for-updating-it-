@@ -101,7 +101,19 @@ export function CaptionsTimeline({ words, style, lineAnimations, lineStyles, wor
         const next = lines[i + 1];
         const phraseStartSec = line.words[0].start;
         const phraseEndSec = line.words[line.words.length - 1].end;
-        const heldUntilSec = next ? next.words[0].start : phraseEndSec + 0.25;
+        // Cap how long a phrase is held on screen after its own words
+        // finish. Without this cap, a phrase whose `next` neighbour is
+        // 30 seconds away (music / silence break in the audio) stays
+        // visible across the whole gap. Combined with ElevenLabs
+        // hallucinations during that silence, consecutive phrases
+        // overlap their hold windows and pile up as a wall of stacked
+        // captions. Hold the phrase ≤1.5s past its own end; if the
+        // next phrase starts sooner, transition at the next phrase.
+        const MAX_HOLD_AFTER_END_SEC = 1.5;
+        const cap = phraseEndSec + MAX_HOLD_AFTER_END_SEC;
+        const heldUntilSec = next
+          ? Math.min(next.words[0].start, cap)
+          : phraseEndSec + 0.25;
         const startFrame = Math.round(phraseStartSec * fps);
         const durationFrames = Math.max(1, Math.round((heldUntilSec - phraseStartSec) * fps));
         // User override (per-line dropdown) takes precedence; falls
