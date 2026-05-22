@@ -611,7 +611,66 @@ ROUGH-ROMAN INPUT FIX EXAMPLES (when input is already Roman but mis-spelled):
     asali    → asli
     bal      → baal
     thodaa   → thoda
-    transplant → transplant   (already correct, keep)`;
+    transplant → transplant   (already correct, keep)
+
+ROUGH-ROMAN ENGLISH-LOAN FIXES (clinic / consultation context — these are
+SPOKEN as English words inside Hindi sentences, so the output MUST be the
+clean English spelling, never the phonetic Roman):
+    sarjari   → surgery
+    sarjeri   → surgery
+    kanplit   → complete
+    kanpalit  → complete
+    kanplet   → complete
+    proablam  → problem
+    problam   → problem
+    prablum   → problem
+    yutyub    → youtube
+    yutub     → youtube
+    yutub p   → youtube par
+    stoak     → stock
+    istok     → stock
+    kyusiti   → quality        (default; could be "city" — pick from context)
+    kuwaliti  → quality
+    kantiti   → quantity
+    benefit   → benefit
+    bennifit  → benefit
+    benefits  → benefits
+    balles    → bald
+    bals      → bald
+    bald      → bald            (already correct, keep)
+    rijalts   → results
+    rijult    → result
+    paramnent → permanent
+    parmanent → permanent
+    permanant → permanent
+    badhaiya  → badhiya         (Hindi "great" — keep as Hinglish, do not translate)
+    badhaya   → badhiya
+    matalab   → matlab          (Hindi "meaning" — common spelling fix)
+    matlb     → matlab
+    soochna   → soochna
+    sohcha    → socha
+    mainne    → maine           (common "I" form fix)
+    yeh hi    → yahi            (common contraction)
+    consalt   → consult
+    consaltent → consultant
+    konsultant → consultant
+    tin       → teen            (when context is the number 3, not English "tin")
+    fais      → face
+    feis      → face
+    apoint    → appoint
+    apoinment → appointment
+    appoinment → appointment
+    karyar    → career
+    kariyar   → career
+    bisness   → business
+    klient    → client
+    customar  → customer
+    kasturmar → customer
+    follow    → follow           (already correct)
+    follouap  → follow-up
+    folowup   → follow-up
+    sajiri    → surgery
+    sajari    → surgery`;
 
   const userPrompt = `Transliterate these Hindi words to Hinglish:\n\n${wordList}`;
 
