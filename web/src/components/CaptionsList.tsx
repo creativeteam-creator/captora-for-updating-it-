@@ -189,6 +189,33 @@ export function CaptionsList({
     }
   };
 
+  // Remove one word from the source array. The line-grouping re-computes
+  // on the next render, so a 4-word line becomes 3, and a 1-word line
+  // disappears entirely. Undo brings the word back (parent records an
+  // editor snapshot inside onWordsChange).
+  const deleteWord = useCallback(
+    (absoluteIdx: number) => {
+      if (!onWordsChange) return;
+      const next = words.slice();
+      next.splice(absoluteIdx, 1);
+      onWordsChange(next);
+    },
+    [words, onWordsChange]
+  );
+
+  // Remove every word that belongs to a line — used by the per-line
+  // trash button. `startIndex` and `count` come straight from the
+  // CaptionLine the user clicked.
+  const deleteLine = useCallback(
+    (startIndex: number, count: number) => {
+      if (!onWordsChange) return;
+      const next = words.slice();
+      next.splice(startIndex, count);
+      onWordsChange(next);
+    },
+    [words, onWordsChange]
+  );
+
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
@@ -240,6 +267,21 @@ export function CaptionsList({
                     {/* Lightning glyph keeps the row tight; full label
                         lives inside the popover. */}
                     ⚡
+                  </button>
+                )}
+                {/* Per-line delete — removes every word that belongs to
+                    this line. Hover-revealed to keep the row visually
+                    quiet; click flips the whole row's caption away. Undo
+                    is available from the editor's history stack. */}
+                {onWordsChange && (
+                  <button
+                    type="button"
+                    onClick={() => deleteLine(line.startIndex, line.words.length)}
+                    title={`Delete line ${i + 1}`}
+                    aria-label={`Delete line ${i + 1}`}
+                    className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded text-[10px] text-[var(--text-muted)] opacity-0 transition hover:bg-red-500/15 hover:text-red-400 group-hover:opacity-100"
+                  >
+                    🗑
                   </button>
                 )}
                 {isPopoverOpen && onLineAnimationChange && (
@@ -392,6 +434,24 @@ export function CaptionsList({
                           >
                             +
                           </button>
+                          {/* Per-word delete — removes just this token.
+                              Same hover-reveal as the resize buttons so
+                              the row stays clean until the user hovers a
+                              word. Empty edits (clearing the text in
+                              edit mode) also delete, but this button
+                              skips the "open editor → erase → enter"
+                              dance for one-click removal. */}
+                          {onWordsChange && (
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); deleteWord(absoluteIdx); }}
+                              className="flex h-4 w-4 items-center justify-center rounded border border-[var(--border-subtle)] text-[10px] leading-none text-[var(--text-muted)] hover:border-red-400 hover:bg-red-500/15 hover:text-red-400"
+                              title="Delete word"
+                              aria-label={`Delete word "${w.word}"`}
+                            >
+                              ×
+                            </button>
+                          )}
                         </span>
                       </span>
                     );
