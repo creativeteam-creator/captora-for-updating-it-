@@ -415,6 +415,36 @@ const PHONETIC_ENGLISH_FIXES: Record<string, string> = {
 };
 
 /**
+ * Apply the phonetic-English safety net to every word in a list, also
+ * fixing the joined transcript text in tandem. This is the safety pass
+ * the transcribe router calls AFTER the LLM polish step — whether the
+ * LLM succeeded, fell back, or all providers hit their daily quota.
+ * When the LLM throws (e.g. Groq + Gemini both 429-quota on the same
+ * day), this is the only line of defence keeping rough Roman from
+ * ElevenLabs reaching the final captions.
+ */
+export function applyPhoneticEnglishSafetyNet(
+  words: WhisperWord[],
+  text: string
+): { words: WhisperWord[]; text: string } {
+  let fixed = 0;
+  const nextWords = words.map((w) => {
+    const replaced = applyPhoneticEnglishFix(w.word);
+    if (replaced !== w.word) fixed++;
+    return replaced !== w.word ? { ...w, word: replaced } : w;
+  });
+  // Apply the same fix token-by-token to the joined transcript text,
+  // preserving whitespace runs (so "  hi   there" doesn't collapse).
+  const nextText = text.replace(/\S+/g, (token) => applyPhoneticEnglishFix(token));
+  if (fixed > 0) {
+    console.log(
+      `[hinglish-llm] safety net (router pass) fixed ${fixed} word(s) — runs regardless of LLM success`
+    );
+  }
+  return { words: nextWords, text: nextText };
+}
+
+/**
  * Apply the phonetic-English safety net to a single word. Preserves
  * leading capitalisation (so a sentence-start "Skul" becomes "School").
  * Returns the input unchanged when no mapping matches.

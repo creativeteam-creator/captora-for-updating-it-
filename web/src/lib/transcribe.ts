@@ -41,6 +41,7 @@ import {
   transliterateTextToHinglish,
   isDevanagari,
   isHinglishLLMEnabled,
+  applyPhoneticEnglishSafetyNet,
 } from "./hinglish-llm";
 import type { WritingScript } from "./languages";
 
@@ -86,7 +87,14 @@ export async function transcribe(req: TranscribeRequest): Promise<TranscribeResu
       const raw = await callProvider(provider, req);
       const repaired = repairTimestamps(raw, provider);
       const finalised = await applyRomanizationIfNeeded(repaired, req, provider);
-      return { ...finalised, provider };
+      // Final safety pass — runs whether the LLM polish step inside
+      // applyRomanizationIfNeeded succeeded, fell back to optitrans,
+      // or all LLM providers hit daily quota. Previously the safety
+      // net only ran inside the LLM polish function, so a day where
+      // both Gemini and Groq tripped their 429s left rough Roman
+      // ("laiph", "koanphidentali", "heyar") in the captions.
+      const safe = applyPhoneticEnglishSafetyNet(finalised.words, finalised.text);
+      return { ...finalised, words: safe.words, text: safe.text, provider };
     } catch (err) {
       lastError = err;
       console.warn(`[transcribe] provider=${provider} failed:`, err instanceof Error ? err.message : err);
