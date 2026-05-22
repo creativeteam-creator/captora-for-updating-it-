@@ -88,10 +88,12 @@ function pickProvider(): ProviderInfo {
   if (forced === "gemini")    { const p = tryGemini();    if (p) return p; }
   if (forced === "groq")      { const p = tryGroq();      if (p) return p; }
 
-  // Auto: walk down the priority list. Anthropic > OpenAI > Gemini > Groq
-  // — paid providers first when they're available, free Gemini next
-  // (better Hindi than Llama), free Groq as last resort.
-  return tryAnthropic() ?? tryOpenAI() ?? tryGemini() ?? tryGroq() ?? (() => {
+  // Auto: walk down the priority list. Anthropic > OpenAI > Groq > Gemini.
+  // Groq now sits above Gemini because Llama-3.3-70b follows our prompt's
+  // example list more aggressively on rough-Roman English-loanword fixes
+  // ("skul"/"heyar"/"arzund" → school/hair/around). Gemini Flash often
+  // leaves these alone, mistaking them for already-clean Hinglish.
+  return tryAnthropic() ?? tryOpenAI() ?? tryGroq() ?? tryGemini() ?? (() => {
     throw new Error(
       "hinglish-llm: no provider key configured " +
       "(set ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, or GROQ_API_KEY)"
@@ -284,6 +286,124 @@ async function callLLM(
   return { status: resp.status, ok: true, text, retryAfterHeader: null, rawBody: "" };
 }
 
+// ── Phonetic-English safety net ───────────────────────────────────────────
+//
+// Hardcoded map of common rough-Roman misspellings that ElevenLabs Scribe
+// returns for English words spoken inside Hindi sentences. The Hinglish
+// LLM polish step SHOULD catch these via its example prompt, but Gemini
+// Flash in particular leaves them alone (it treats them as already-clean
+// Hinglish). This runs AFTER the LLM polish as a last-mile defence.
+//
+// Inclusion rule: only entries whose source spelling has NO plausible
+// Hindi/Hinglish meaning, so we never corrupt a real word. Match is
+// case-insensitive but preserves the original casing in the output for
+// proper nouns / sentence starts.
+const PHONETIC_ENGLISH_FIXES: Record<string, string> = {
+  // Hair clinic / consultation vocabulary
+  heyar: "hair",
+  heyars: "hairs",
+  heyarlain: "hairline",
+  phoal: "fall",
+  fall: "fall",
+  sarjari: "surgery",
+  sarjeri: "surgery",
+  sajari: "surgery",
+  sajiri: "surgery",
+  kanplit: "complete",
+  kanpalit: "complete",
+  kanplet: "complete",
+  paramnent: "permanent",
+  parmanent: "permanent",
+  permanant: "permanent",
+  rijalt: "result",
+  rijalts: "results",
+  rijult: "result",
+  nechural: "natural",
+  nechral: "natural",
+  doaktar: "doctor",
+  daktar: "doctor",
+  klinik: "clinic",
+  trasplant: "transplant",
+  tritamen: "treatment",
+  tritament: "treatment",
+  menbar: "member",
+  nanbar: "number",
+  nunber: "number",
+  tim: "team",
+  groth: "growth",
+  // Education / age
+  skul: "school",
+  tvelth: "twelfth",
+  twelth: "twelfth",
+  klass: "class",
+  // Common conversational English borrowings
+  proablam: "problem",
+  problam: "problem",
+  prablum: "problem",
+  yutyub: "youtube",
+  yutub: "youtube",
+  yuttube: "youtube",
+  stoak: "stock",
+  istok: "stock",
+  kyusiti: "quality",
+  kuwaliti: "quality",
+  kantiti: "quantity",
+  bennifit: "benefit",
+  benefits: "benefits",
+  arzund: "around",
+  araund: "around",
+  altaranet: "alternate",
+  altarnate: "alternate",
+  oapshn: "option",
+  opshan: "option",
+  oapshan: "option",
+  rekomend: "recommend",
+  rekomand: "recommend",
+  salamost: "almost",
+  almoast: "almost",
+  consalt: "consult",
+  consaltent: "consultant",
+  konsultant: "consultant",
+  apoinment: "appointment",
+  appoinment: "appointment",
+  apointment: "appointment",
+  customar: "customer",
+  kasturmar: "customer",
+  folowup: "follow-up",
+  follouap: "follow-up",
+  karyar: "career",
+  kariyar: "career",
+  bisness: "business",
+  klient: "client",
+  feis: "face",
+  fais: "face",
+  // Misc misspellings the LLM sometimes leaves through
+  yutyub_p: "youtube par",
+};
+
+/**
+ * Apply the phonetic-English safety net to a single word. Preserves
+ * leading capitalisation (so a sentence-start "Skul" becomes "School").
+ * Returns the input unchanged when no mapping matches.
+ */
+function applyPhoneticEnglishFix(word: string): string {
+  if (!word) return word;
+  // Strip a single trailing punctuation mark for lookup but reattach
+  // it to the output, so "skul," becomes "school,".
+  const m = word.match(/^([\p{L}\p{N}'-]+)([^\p{L}\p{N}'-]?)$/u);
+  const core = m ? m[1] : word;
+  const tail = m ? m[2] : "";
+  const lower = core.toLowerCase();
+  const replacement = PHONETIC_ENGLISH_FIXES[lower];
+  if (!replacement) return word;
+  // Preserve initial capitalisation on the replacement.
+  const cased =
+    core[0] === core[0]?.toUpperCase() && core !== lower
+      ? replacement[0].toUpperCase() + replacement.slice(1)
+      : replacement;
+  return cased + tail;
+}
+
 // ── Public API ────────────────────────────────────────────────────────────
 
 /**
@@ -316,13 +436,19 @@ function buildProviderChain(): ProviderInfo[] {
     if (forced === "anthropic" || forced === "openai" || forced === "gemini" || forced === "groq") {
       tryAddOne(forced);
     }
-    // Default priority for the remaining slots — paid quality first,
-    // free Gemini next, free Groq last. Already-added providers are
-    // skipped via the `seen` set.
+    // Default priority for the remaining slots. Paid providers first,
+    // then **Groq before Gemini**: in production we found Gemini Flash
+    // leaves common English loanwords as their rough phonetic Roman
+    // ("skul", "heyar", "arzund", "altaranet", "oapshn", "rekomend"…)
+    // because it interprets them as already-clean Hinglish. Llama-3.3-
+    // 70b on Groq follows the prompt's example list more aggressively
+    // and actually converts them to school / hair / around / etc.
+    // Gemini stays in the chain as a hot standby for when Groq's
+    // daily-token quota trips.
     tryAddOne("anthropic");
     tryAddOne("openai");
-    tryAddOne("gemini");
     tryAddOne("groq");
+    tryAddOne("gemini");
   } finally {
     if (original === undefined) delete process.env.HINGLISH_LLM_PROVIDER;
     else process.env.HINGLISH_LLM_PROVIDER = original;
@@ -416,6 +542,25 @@ export async function transliterateWordsToHinglish(
         console.log(
           `[hinglish-llm] applied optitrans regex fallback to ${finalOptitransCount} words ` +
           `the LLM couldn't transliterate after ${2 + 1} passes`
+        );
+      }
+
+      // Phonetic-English safety net — catches common rough-Roman
+      // misspellings of English words that BOTH Gemini Flash and Groq
+      // sometimes leave alone because the input "looks Hinglish-y".
+      // Only includes mappings where the source has no plausible Hindi
+      // meaning, so no false positives on real Hindi words.
+      let safetyNetCount = 0;
+      for (let i = 0; i < llmResult.length; i++) {
+        const fixed = applyPhoneticEnglishFix(llmResult[i].word);
+        if (fixed !== llmResult[i].word) {
+          llmResult[i] = { ...llmResult[i], word: fixed };
+          safetyNetCount++;
+        }
+      }
+      if (safetyNetCount > 0) {
+        console.log(
+          `[hinglish-llm] phonetic-english safety net fixed ${safetyNetCount} word(s) the LLM left as rough Roman`
         );
       }
 
