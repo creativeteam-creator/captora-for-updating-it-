@@ -125,8 +125,13 @@ jobs:
           GEMINI_API_KEY=${{ secrets.PROD_GEMINI_API_KEY }}
 
           # ── Hinglish LLM provider preference ─────────────────────────
-          HINGLISH_LLM_PROVIDER=groq
-          HINGLISH_LLM_MODEL=llama-3.3-70b-versatile
+          # Default chain order in code is Anthropic > OpenAI > Gemini >
+          # Groq. We don't pin a provider here so production lets Gemini
+          # Flash run first (fast, free, large daily request budget) and
+          # falls through to Groq Llama-3.3-70b automatically on Gemini
+          # quota / 5xx / timeout. The phonetic safety net + expanded
+          # prompt examples make either provider produce equivalent
+          # captions in practice.
 
           # ── Local GPU transcription (Python + faster-whisper) ────────
           # Capability detection at first launch flips this to 0 on

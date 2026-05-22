@@ -88,12 +88,13 @@ function pickProvider(): ProviderInfo {
   if (forced === "gemini")    { const p = tryGemini();    if (p) return p; }
   if (forced === "groq")      { const p = tryGroq();      if (p) return p; }
 
-  // Auto: walk down the priority list. Anthropic > OpenAI > Groq > Gemini.
-  // Groq now sits above Gemini because Llama-3.3-70b follows our prompt's
-  // example list more aggressively on rough-Roman English-loanword fixes
-  // ("skul"/"heyar"/"arzund" → school/hair/around). Gemini Flash often
-  // leaves these alone, mistaking them for already-clean Hinglish.
-  return tryAnthropic() ?? tryOpenAI() ?? tryGroq() ?? tryGemini() ?? (() => {
+  // Auto: walk down the priority list. Anthropic > OpenAI > Gemini > Groq.
+  // Gemini Flash is faster (~1-2s vs ~2-3s for Llama-70b), has a larger
+  // free-tier daily request budget, and with the hardcoded phonetic
+  // safety net catching anything Flash leaves rough-Roman, the accuracy
+  // gap closes to within noise. Groq stays in the chain as a strong
+  // standby for Gemini outages or daily-quota trips.
+  return tryAnthropic() ?? tryOpenAI() ?? tryGemini() ?? tryGroq() ?? (() => {
     throw new Error(
       "hinglish-llm: no provider key configured " +
       "(set ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, or GROQ_API_KEY)"
@@ -468,19 +469,17 @@ function buildProviderChain(): ProviderInfo[] {
     if (forced === "anthropic" || forced === "openai" || forced === "gemini" || forced === "groq") {
       tryAddOne(forced);
     }
-    // Default priority for the remaining slots. Paid providers first,
-    // then **Groq before Gemini**: in production we found Gemini Flash
-    // leaves common English loanwords as their rough phonetic Roman
-    // ("skul", "heyar", "arzund", "altaranet", "oapshn", "rekomend"…)
-    // because it interprets them as already-clean Hinglish. Llama-3.3-
-    // 70b on Groq follows the prompt's example list more aggressively
-    // and actually converts them to school / hair / around / etc.
-    // Gemini stays in the chain as a hot standby for when Groq's
-    // daily-token quota trips.
+    // Default priority for the remaining slots. Paid providers first
+    // (Anthropic / OpenAI — strongest accuracy when configured), then
+    // **Gemini before Groq**: Flash is faster, has a roomier free-tier
+    // request budget, and the hardcoded phonetic safety net + expanded
+    // prompt examples catch anything Flash conservatively leaves alone.
+    // Groq Llama-3.3-70b stays in the chain as the standby for Gemini
+    // outages or daily-quota trips — it's still a high-quality polisher.
     tryAddOne("anthropic");
     tryAddOne("openai");
-    tryAddOne("groq");
     tryAddOne("gemini");
+    tryAddOne("groq");
   } finally {
     if (original === undefined) delete process.env.HINGLISH_LLM_PROVIDER;
     else process.env.HINGLISH_LLM_PROVIDER = original;
