@@ -80,6 +80,15 @@ const nextConfig = {
       "../node_modules/pend/**",
       "../node_modules/debug/**",
       "../node_modules/ms/**",
+      // pump + chain — extract-zip's nested get-stream pulls these in
+      // for the stream piping during Chromium binary unpack. v1.0.29
+      // added extract-zip but `pump` was the next link missing.
+      "../node_modules/pump/**",
+      "../node_modules/end-of-stream/**",
+      "../node_modules/once/**",
+      "../node_modules/wrappy/**",
+      "../node_modules/inherits/**",
+      "../node_modules/mkdirp/**",
     ],
     "/api/transcribe": [
       // ffmpeg-static ships a native binary used for audio extraction
