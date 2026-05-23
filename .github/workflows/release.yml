@@ -240,12 +240,37 @@ jobs:
             fi
           done
 
+          # 6. The Remotion composition workspace (sibling to web/).
+          # /api/render's bundle() reads `remotion/src/index.ts` relative
+          # to process.cwd() — i.e. the standalone root's sibling. That
+          # folder doesn't exist until we copy it: the standalone tree
+          # only contains the web workspace by default. Without this
+          # render fails on first invocation with:
+          #   ENOENT: ...standalone/remotion/src/index.ts
+          # The bundle() call runs esbuild on raw TSX, so we need the
+          # entire src/ directory (plus package.json + tsconfig for
+          # esbuild resolution).
+          STANDALONE_ROOT=web/.next/standalone
+          if [ -d remotion ]; then
+            echo "Staging remotion workspace → $STANDALONE_ROOT/remotion"
+            mkdir -p "$STANDALONE_ROOT/remotion"
+            for sub in src public package.json tsconfig.json remotion.config.ts; do
+              if [ -e "remotion/$sub" ]; then
+                cp -Rn "remotion/$sub" "$STANDALONE_ROOT/remotion/" 2>/dev/null || \
+                  cp -R "remotion/$sub" "$STANDALONE_ROOT/remotion/"
+              fi
+            done
+          fi
+
           echo ""
           echo "@remotion contents in standalone:"
           ls "$STANDALONE_NM/@remotion" 2>/dev/null || echo "  (empty)"
           echo ""
           echo "execa in standalone:"
           ls "$STANDALONE_NM/execa" 2>/dev/null | head -5 || echo "  (missing)"
+          echo ""
+          echo "remotion workspace src in standalone:"
+          ls "$STANDALONE_ROOT/remotion/src" 2>/dev/null | head -10 || echo "  (missing)"
 
       - name: Build Electron + installer + publish
         env:
