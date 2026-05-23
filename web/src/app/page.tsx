@@ -7,6 +7,7 @@ import { UploadHero } from "@/components/UploadHero";
 import { RecentVideos } from "@/components/RecentVideos";
 import { PrepareMediaModal, type PrepareMediaSettings } from "@/components/PrepareMediaModal";
 import { EditorView } from "@/components/EditorView";
+import { SettingsModal } from "@/components/SettingsModal";
 import {
   deleteProject,
   detectMediaKind,
@@ -106,6 +107,10 @@ export default function Home() {
   const redoStackRef = useRef<EditorSnapshot[]>([]);
   const { user } = useUser();
   const initials = userInitials(user);
+  // Opens the Settings modal (per-user Gemini / Groq API key inputs).
+  // Modal lives at the top of the JSX tree so it covers both Home and
+  // Editor views without duplication.
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const makeEditorSnapshot = useCallback(
     (): EditorSnapshot => ({
@@ -349,6 +354,17 @@ export default function Home() {
         // source object would otherwise stick around in storage.
         supabase.storage.from("captora-source").remove([storagePath]).catch(() => {});
         throw new Error(json.error ?? `HTTP ${res.status}`);
+      }
+      // Surface server-side warnings (quota exhausted etc.) to the user
+      // via a simple browser alert. Native `alert()` keeps the
+      // implementation small; could be replaced with a toast component
+      // later if the UI grows more notifications.
+      type Warn = { kind: string; provider: string; userOwned: boolean; message: string };
+      const warnings: Warn[] = Array.isArray(json.warnings) ? json.warnings : [];
+      if (warnings.length > 0) {
+        const lines = warnings.map((w) => `• ${w.message}`).join("\n");
+        // Defer one tick so the editor transition finishes first.
+        setTimeout(() => window.alert(`⚠ Captions tayar ho gayi but:\n\n${lines}`), 100);
       }
 
       // Fetch the freshly-saved project (resolves signed URLs etc.).
@@ -662,8 +678,9 @@ export default function Home() {
           </span>
           <button
             type="button"
-            title={user?.email ?? ""}
-            className="flex h-9 w-9 items-center justify-center rounded-full bg-[var(--bg-elevated)] text-xs font-bold text-[var(--text)]"
+            title={`Settings · ${user?.email ?? ""}`}
+            onClick={() => setSettingsOpen(true)}
+            className="flex h-9 w-9 items-center justify-center rounded-full bg-[var(--bg-elevated)] text-xs font-bold text-[var(--text)] hover:bg-[var(--bg-hover)]"
           >
             {initials}
           </button>
@@ -713,6 +730,12 @@ export default function Home() {
           wordSizes={wordSizes}
           onWordSizesChange={setWordSizes}
         />
+        <SettingsModal
+          open={settingsOpen}
+          onClose={() => setSettingsOpen(false)}
+          userId={user?.id}
+          userEmail={user?.email}
+        />
       </div>
     );
   }
@@ -722,7 +745,7 @@ export default function Home() {
     <div className="flex min-h-screen">
       <Sidebar />
       <div className="flex min-h-screen flex-1 flex-col">
-        <TopBar onSearch={setSearchQuery} />
+        <TopBar onSearch={setSearchQuery} onOpenSettings={() => setSettingsOpen(true)} />
 
         <main className="flex-1 overflow-y-auto px-8 py-6">
           <UploadHero onFile={onFilePicked} disabled={uploading || transcribing || opening} />
@@ -766,6 +789,12 @@ export default function Home() {
         file={pickedFile}
         onClose={() => setPickedFile(null)}
         onGenerate={onGenerate}
+      />
+      <SettingsModal
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        userId={user?.id}
+        userEmail={user?.email}
       />
     </div>
   );

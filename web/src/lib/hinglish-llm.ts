@@ -15,6 +15,7 @@ import { readFile } from "fs/promises";
 import { existsSync } from "fs";
 import { join } from "path";
 import { indicToRoman } from "./script";
+import { resolveKey, pushWarning } from "./requestContext";
 
 // ── Provider configuration ───────────────────────────────────────────────
 
@@ -31,8 +32,14 @@ function pickProvider(): ProviderInfo {
   const forced = (process.env.HINGLISH_LLM_PROVIDER || "").toLowerCase().trim();
   const anthropicKey = process.env.ANTHROPIC_API_KEY;
   const openaiKey = process.env.OPENAI_API_KEY;
-  const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-  const groqKey = process.env.GROQ_API_KEY;
+  // Per-user Gemini / Groq overrides come from the request's AsyncLocal
+  // context (Settings panel → user_api_keys row). Falls back to the
+  // bundled .env.production key when the user hasn't set their own.
+  // This is how each clinic user gets their own quota lane instead of
+  // sharing the team's pooled key.
+  const geminiKey =
+    resolveKey("gemini", process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY).key;
+  const groqKey = resolveKey("groq", process.env.GROQ_API_KEY).key;
 
   // HINGLISH_LLM_MODEL only applies to the *currently picked* provider —
   // if the user pinned a provider via HINGLISH_LLM_PROVIDER, the override
@@ -920,6 +927,27 @@ clean English spelling, never the phonetic Roman):
         `[hinglish-llm] ${provider.name} ${resp.status} daily quota exhausted ` +
         `— skipping retries, falling through to next provider`
       );
+      // Tell the route handler so it can surface a clear banner to the
+      // user. We only push for gemini / groq (the two providers exposed
+      // in the Settings panel). Re-resolve to discover whether the
+      // failing key was the user's own override or the bundled fallback
+      // — drives "aapki key" vs "shared key" wording in the UI.
+      if (provider.name === "gemini" || provider.name === "groq") {
+        const { userOwned } = resolveKey(
+          provider.name,
+          provider.name === "gemini"
+            ? process.env.GEMINI_API_KEY
+            : process.env.GROQ_API_KEY
+        );
+        pushWarning({
+          kind: "quota-exhausted",
+          provider: provider.name,
+          userOwned,
+          message: userOwned
+            ? `Aapki ${provider.name === "gemini" ? "Gemini" : "Groq"} API key ka daily quota khatam ho gaya. Settings me check karo ya kal try karo.`
+            : `Shared ${provider.name === "gemini" ? "Gemini" : "Groq"} key ka daily quota khatam — Settings se apni key add karo for guaranteed quota.`,
+        });
+      }
       throw new Error(
         `hinglish-llm: ${provider.name} daily quota exhausted: ${resp.rawBody.slice(0, 200)}`
       );

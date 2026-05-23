@@ -17,6 +17,8 @@ import {
 } from "@/lib/supabase/storage";
 import { downloadToFile } from "@/lib/supabase/storage-server";
 import { isDesktopMode, getLocalSessionsDir } from "@/lib/captora-mode";
+import { getUserApiKeys } from "@/lib/userApiKeys";
+import { withRequestContext } from "@/lib/requestContext";
 
 export const runtime = "nodejs";
 export const maxDuration = 300; // seconds — first call downloads the model
@@ -228,15 +230,42 @@ export async function POST(req: NextRequest) {
     }
 
     try {
+      // ───── Resolve per-user API keys ─────
+      // Pulls Gemini / Groq overrides from the Settings panel (stored in
+      // public.user_api_keys). Falls through to the bundled .env keys when
+      // the user hasn't supplied their own. Wrapping the transcribe() call
+      // in withRequestContext makes the keys readable via AsyncLocalStorage
+      // anywhere downstream — no need to thread them through every fn.
+      const userKeys = await getUserApiKeys(supabase, user.id);
+      console.log(
+        `[/api/transcribe] user keys: gemini=${userKeys.geminiApiKey ? "user-set" : "bundled"} groq=${userKeys.groqApiKey ? "user-set" : "bundled"}`
+      );
+
       // ───── Transcribe ─────
+      // `requestWarnings` collects any structured notes the downstream
+      // pipeline pushes — primarily quota-exhausted entries from
+      // hinglish-llm.ts. We pass the array reference into the context
+      // so downstream code can append; the route handler reads it
+      // after transcribe() returns and forwards it to the client.
       const t0 = Date.now();
-      const result = await transcribe({
-        filePath: localPath,
-        spokenLanguage,
-        writingScript,
-        translateToEnglish,
-        accuracy,
-      });
+      const requestWarnings: import("@/lib/requestContext").RequestWarning[] = [];
+      const result = await withRequestContext(
+        {
+          keyOverrides: {
+            geminiApiKey: userKeys.geminiApiKey,
+            groqApiKey: userKeys.groqApiKey,
+          },
+          warnings: requestWarnings,
+        },
+        () =>
+          transcribe({
+            filePath: localPath,
+            spokenLanguage,
+            writingScript,
+            translateToEnglish,
+            accuracy,
+          })
+      );
       console.log(
         `[/api/transcribe] ok in ${Date.now() - t0}ms — provider=${result.provider} words=${result.words.length} duration=${result.duration}s`
       );
@@ -297,6 +326,8 @@ export async function POST(req: NextRequest) {
       }
 
       // Local file stays for /api/render to use; cleanup happens there.
+      // `warnings` carries quota-exhausted notes etc. so the editor can
+      // show a toast like "aapki Gemini key ka quota khatam ho gaya".
       return NextResponse.json({
         ok: true,
         projectId,
@@ -304,6 +335,7 @@ export async function POST(req: NextRequest) {
         provider: result.provider,
         result,
         project: inserted,
+        warnings: requestWarnings,
       });
     } catch (err) {
       // Transcription failure — drop the local copy.

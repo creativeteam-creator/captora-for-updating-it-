@@ -11,9 +11,10 @@ import { useUser, userInitials } from "@/lib/useUser";
 
 interface Props {
   onSearch?: (query: string) => void;
+  onOpenSettings?: () => void;
 }
 
-export function TopBar({ onSearch }: Props) {
+export function TopBar({ onSearch, onOpenSettings }: Props) {
   const [query, setQuery] = useState("");
   const { user } = useUser();
   const initials = userInitials(user);
@@ -50,6 +51,8 @@ export function TopBar({ onSearch }: Props) {
       <div className="ml-auto flex items-center gap-2">
         <button
           type="button"
+          onClick={onOpenSettings}
+          title="Settings · API Keys"
           className="flex h-9 w-9 items-center justify-center rounded-full bg-[var(--bg-elevated)] text-xs font-bold text-[var(--text)] hover:bg-[var(--bg-hover)]"
         >
           {initials}
