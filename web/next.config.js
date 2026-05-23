@@ -89,6 +89,15 @@ const nextConfig = {
       "../node_modules/wrappy/**",
       "../node_modules/inherits/**",
       "../node_modules/mkdirp/**",
+      // React + ReactDOM full packages — Remotion's esbuild bundle()
+      // imports react-dom/client (createRoot) at composition build time.
+      // Next.js tracer ships only the subpaths the web app uses
+      // (react-dom/server etc.), so client.js was missing in v1.0.31.
+      // Force-include the whole packages plus scheduler (React's own
+      // transitive).
+      "../node_modules/react/**",
+      "../node_modules/react-dom/**",
+      "../node_modules/scheduler/**",
     ],
     "/api/transcribe": [
       // ffmpeg-static ships a native binary used for audio extraction

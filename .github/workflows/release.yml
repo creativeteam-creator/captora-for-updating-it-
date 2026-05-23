@@ -226,7 +226,8 @@ jobs:
                       shebang-regex isexe \
                       ffmpeg-static \
                       extract-zip yauzl buffer-crc32 fd-slicer pend debug ms \
-                      pump end-of-stream once wrappy inherits mkdirp; do
+                      pump end-of-stream once wrappy inherits mkdirp \
+                      react react-dom scheduler; do
             SRC="node_modules/$pkg"
             DST="$STANDALONE_NM/$pkg"
             if [ -d "$SRC" ]; then
