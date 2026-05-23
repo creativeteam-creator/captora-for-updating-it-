@@ -65,6 +65,21 @@ const nextConfig = {
       "../node_modules/shebang-regex/**",
       "../node_modules/isexe/**",
       "../node_modules/ffmpeg-static/**",
+      // extract-zip is loaded by @remotion/renderer at runtime to unpack
+      // the Chromium binary on first render. Without it the route throws
+      // ERR_MODULE_NOT_FOUND at render start — confirmed in production
+      // on a Windows v1.0.27 install where every render attempt failed
+      // with 500. Same family as the execa / @remotion/bundler tracer
+      // gaps we already patched; the tracer can't see dynamically
+      // imported modules so we have to force-include them + their
+      // transitive deps.
+      "../node_modules/extract-zip/**",
+      "../node_modules/yauzl/**",
+      "../node_modules/buffer-crc32/**",
+      "../node_modules/fd-slicer/**",
+      "../node_modules/pend/**",
+      "../node_modules/debug/**",
+      "../node_modules/ms/**",
     ],
     "/api/transcribe": [
       // ffmpeg-static ships a native binary used for audio extraction

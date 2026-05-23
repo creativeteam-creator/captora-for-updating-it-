@@ -224,7 +224,8 @@ jobs:
                       is-stream merge-stream npm-run-path mimic-fn onetime \
                       signal-exit strip-final-newline shebang-command \
                       shebang-regex isexe \
-                      ffmpeg-static; do
+                      ffmpeg-static \
+                      extract-zip yauzl buffer-crc32 fd-slicer pend debug ms; do
             SRC="node_modules/$pkg"
             DST="$STANDALONE_NM/$pkg"
             if [ -d "$SRC" ]; then
