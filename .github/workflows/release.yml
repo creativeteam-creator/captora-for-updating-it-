@@ -263,12 +263,25 @@ jobs:
             done
           fi
 
+          # 7. Auto-discover & stage every transitive dep Remotion's
+          # bundler/renderer needs at runtime. Replaces the historical
+          # whack-a-mole of adding one missing package per release
+          # (extract-zip → pump → style-loader → …). Scans require() /
+          # import() strings + manifest dependencies recursively from
+          # @remotion/bundler + @remotion/renderer + remotion seeds.
+          echo ""
+          echo "Running auto-stager (Remotion deep deps)..."
+          node scripts/stage-remotion-deps.js || echo "  (auto-stager failed — manual list above still covers known deps)"
+
           echo ""
           echo "@remotion contents in standalone:"
           ls "$STANDALONE_NM/@remotion" 2>/dev/null || echo "  (empty)"
           echo ""
           echo "execa in standalone:"
           ls "$STANDALONE_NM/execa" 2>/dev/null | head -5 || echo "  (missing)"
+          echo ""
+          echo "style-loader in standalone (auto-stager check):"
+          ls "$STANDALONE_NM/style-loader" 2>/dev/null | head -3 || echo "  (missing — auto-stager regression!)"
           echo ""
           echo "remotion workspace src in standalone:"
           ls "$STANDALONE_ROOT/remotion/src" 2>/dev/null | head -10 || echo "  (missing)"
