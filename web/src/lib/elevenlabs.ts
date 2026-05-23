@@ -173,13 +173,22 @@ async function parseAndReturn(
 
   const words: WhisperWord[] = [];
   let dropped = 0;
+  let clamped = 0;
+  // Real spoken words rarely exceed this duration. ElevenLabs sometimes
+  // emits a single "word" whose end timestamp extends across an entire
+  // music / silence segment — a 22-min consultation video came back with
+  // a "treatment" token spanning 8 seconds, which then displayed as the
+  // only caption on screen for that whole window (because the
+  // PhraseCaption duration follows the word's own start–end span).
+  // Clamp anything past 4 seconds back to start + 4s so the rest of the
+  // timeline gets a chance to render normally.
+  const MAX_WORD_DURATION_SEC = 4.0;
   for (const w of wordEntries) {
     const text = (w.text ?? "").trim();
     if (!text) continue;
     const start = typeof w.start === "number" ? w.start : 0;
-    const end = typeof w.end === "number" ? w.end : 0;
-    // Drop hallucinated / junk entries that ElevenLabs returns during
-    // music or silence sections. Symptoms in the wild:
+    let end = typeof w.end === "number" ? w.end : 0;
+    // Drop hallucinated / junk entries:
     //   - end <= start  (impossible duration)
     //   - end - start < 30ms (no real spoken word is this short; these
     //     are usually marker tokens emitted during background music or
@@ -187,10 +196,24 @@ async function parseAndReturn(
     //     "phrase" that fills the entire preview frame as a text wall)
     if (end <= start) { dropped++; continue; }
     if (end - start < 0.03) { dropped++; continue; }
+    // Clamp pathologically long-duration "words". This is the fix for
+    // the "ek single word for multiple lines worth of audio" bug —
+    // without this a hallucinated 30-second word would occupy 30s of
+    // screen time as the only visible caption.
+    if (end - start > MAX_WORD_DURATION_SEC) {
+      end = start + MAX_WORD_DURATION_SEC;
+      clamped++;
+    }
     words.push({ word: text, start, end });
   }
   if (dropped > 0) {
     console.log(`[elevenlabs] dropped ${dropped} hallucinated/zero-duration word(s)`);
+  }
+  if (clamped > 0) {
+    console.log(
+      `[elevenlabs] clamped ${clamped} word(s) with duration > ${MAX_WORD_DURATION_SEC}s back to ${MAX_WORD_DURATION_SEC}s ` +
+      `(hallucinated long-duration tokens — usually appear during music / silence sections)`
+    );
   }
 
   const duration = words.length ? words[words.length - 1].end : 0;
