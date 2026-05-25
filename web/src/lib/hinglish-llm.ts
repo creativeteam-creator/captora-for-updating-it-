@@ -419,6 +419,53 @@ const PHONETIC_ENGLISH_FIXES: Record<string, string> = {
   kaip: "cap",
   // Misc misspellings the LLM sometimes leaves through
   yutyub_p: "youtube par",
+  // Spelled-out numbers — LLM (Gemini Flash especially) sometimes
+  // ignores the "stay as digits" rule and writes "seven" / "twelve".
+  // Mapping these back to digits when they appear as standalone words.
+  // Only includes forms whose word is UNAMBIGUOUSLY a number — words
+  // like "one" or "two" that could legitimately appear as English
+  // pronouns in some contexts are NOT here.
+  zero: "0",
+  three: "3",
+  four: "4",
+  five: "5",
+  six: "6",
+  seven: "7",
+  eight: "8",
+  nine: "9",
+  ten: "10",
+  eleven: "11",
+  twelve: "12",
+  thirteen: "13",
+  fourteen: "14",
+  fifteen: "15",
+  sixteen: "16",
+  seventeen: "17",
+  eighteen: "18",
+  nineteen: "19",
+  twenty: "20",
+  thirty: "30",
+  forty: "40",
+  fifty: "50",
+  sixty: "60",
+  seventy: "70",
+  eighty: "80",
+  ninety: "90",
+  hundred: "100",
+  thousand: "1000",
+  // Hyphenated grade-style ("Grade-seven") split safely back:
+  "grade-seven": "grade 7",
+  "grade-eight": "grade 8",
+  "grade-nine": "grade 9",
+  "grade-ten": "grade 10",
+  "grade-eleven": "grade 11",
+  "grade-twelve": "grade 12",
+  "class-seven": "class 7",
+  "class-eight": "class 8",
+  "class-nine": "class 9",
+  "class-ten": "class 10",
+  "class-eleven": "class 11",
+  "class-twelve": "class 12",
 };
 
 /**
@@ -716,7 +763,16 @@ OUTPUT FORMAT — extremely strict:
 - DO NOT translate — write how the word is SPOKEN in everyday Hindi
 - English loanwords MUST be in clean English: transplant, clinic, doctor, member,
   number, team, hospital, treatment, natural, FUE, FUT, etc.
-- Numbers stay as digits
+- Numbers stay as digits — NEVER spell them out
+    CORRECT:    7, 12, 100, 2024, grade 7, age 29, 5 saal
+    WRONG:      seven, twelve, hundred, two-thousand-twenty-four
+    WRONG:      Grade-seven, age twenty-nine, five saal
+  Even if the spoken form sounds like a word ("seven", "twelve"), if
+  the speaker referred to a numeric quantity / measurement / count /
+  age / grade / year / time / phone-number / price, the output MUST
+  be digits. Same for fractional / decimal values: "saade teen" → 3.5.
+  Hindi number words spoken on their own (saal, mahina counters) can
+  stay as digits where the original transcript had digits.
 
 DEVANAGARI EXAMPLES:
     अपनी  → apni        (NOT apani or apnī)

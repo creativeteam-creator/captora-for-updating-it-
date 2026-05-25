@@ -263,8 +263,11 @@ export default function Home() {
       // Probe source dimensions so the editor canvas matches the dropped
       // media's aspect ratio (9:16 reel stays vertical, 16:9 YT stays
       // horizontal). Audio uploads return null → defaults to vertical reel.
+      // The user can override aspect via the PrepareMedia modal's
+      // canvasOrientation pick — passing "portrait"/"landscape"/"square"
+      // here forces that aspect regardless of source.
       const probedDims = await probeVideoDimensions(file);
-      setCanvasDims(pickCanvasDimensions(probedDims));
+      setCanvasDims(pickCanvasDimensions(probedDims, settings.canvasOrientation));
 
       // Upload directly to Supabase Storage from the browser. This
       // bypasses /api/transcribe's request body entirely — Next.js's

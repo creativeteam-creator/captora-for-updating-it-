@@ -25,6 +25,13 @@ import {
 import { detectMediaKind } from "@/lib/projects";
 import type { AccuracyTier } from "@/lib/whisper";
 
+/** Canvas orientation picker (Item 9). "auto" preserves the source
+ *  video's native aspect (existing behaviour). The other three force a
+ *  specific output canvas regardless of source aspect — useful when
+ *  the user wants to crop a landscape interview into a portrait reel
+ *  for Instagram, or vice versa. */
+export type CanvasOrientation = "auto" | "portrait" | "landscape" | "square";
+
 export interface PrepareMediaSettings {
   spokenLanguage: string;
   spokenLanguageLabel: string;
@@ -34,6 +41,7 @@ export interface PrepareMediaSettings {
   audioEnhancement: boolean;
   emojis: boolean;
   accuracy: AccuracyTier;
+  canvasOrientation: CanvasOrientation;
 }
 
 interface Props {
@@ -50,6 +58,7 @@ export function PrepareMediaModal({ file, onClose, onGenerate }: Props) {
   const [audioEnhance, setAudioEnhance] = useState(false);
   const [emojis, setEmojis] = useState(false);
   const [accuracy, setAccuracy] = useState<AccuracyTier>("balanced");
+  const [canvasOrientation, setCanvasOrientation] = useState<CanvasOrientation>("auto");
 
   const [langDropdownOpen, setLangDropdownOpen] = useState(false);
   const [scriptDropdownOpen, setScriptDropdownOpen] = useState(false);
@@ -103,6 +112,7 @@ export function PrepareMediaModal({ file, onClose, onGenerate }: Props) {
       audioEnhancement: audioEnhance,
       emojis,
       accuracy,
+      canvasOrientation,
     });
   };
 
@@ -276,6 +286,47 @@ export function PrepareMediaModal({ file, onClose, onGenerate }: Props) {
             </div>
             <p className="text-[10px] text-[var(--text-muted)]">
               First run downloads the model. Bigger = better Hinglish + English mixing accuracy.
+            </p>
+          </div>
+
+          {/* Canvas orientation — picks the output aspect ratio for the
+              preview canvas AND the rendered MP4. "Auto" preserves the
+              source video's native aspect (existing behaviour). The
+              other three force a specific output regardless of source —
+              landscape interview cropped to a portrait reel etc. */}
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-1 text-[11px] text-[var(--text-muted)]">
+              <span>📐</span> Output Canvas
+            </div>
+            <div className="grid grid-cols-4 gap-2">
+              {(
+                [
+                  { id: "auto" as const,      label: "Auto",      hint: "match source" },
+                  { id: "portrait" as const,  label: "Portrait",  hint: "9:16 · reel" },
+                  { id: "landscape" as const, label: "Landscape", hint: "16:9 · YT" },
+                  { id: "square" as const,    label: "Square",    hint: "1:1 · feed" },
+                ]
+              ).map((opt) => {
+                const sel = canvasOrientation === opt.id;
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => setCanvasOrientation(opt.id)}
+                    className={`rounded-md border px-2 py-2 text-center transition ${
+                      sel
+                        ? "border-[var(--accent)] bg-[var(--accent-bg)] text-[var(--accent)]"
+                        : "border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--text)] hover:border-[var(--accent)]/60"
+                    }`}
+                  >
+                    <div className="text-xs font-semibold">{opt.label}</div>
+                    <div className="mt-0.5 text-[10px] text-[var(--text-muted)]">{opt.hint}</div>
+                  </button>
+                );
+              })}
+            </div>
+            <p className="text-[10px] text-[var(--text-muted)]">
+              Forces output to chosen aspect. Auto = same as uploaded video.
             </p>
           </div>
 

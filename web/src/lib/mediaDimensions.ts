@@ -52,11 +52,33 @@ export async function probeVideoDimensions(file: File): Promise<MediaDimensions 
 }
 
 /**
- * Pick the canvas size for preview + render based on the source's
- * actual dimensions. Audio uploads (or unprobed sources) default to a
- * 9:16 reel canvas because that's still the most common output format.
+ * Manual orientation override from the PrepareMedia modal. When the
+ * user picks anything other than "auto" we ignore the source aspect
+ * and force a standard canvas — useful for cropping a landscape
+ * interview to a 9:16 reel or vice versa.
  */
-export function pickCanvasDimensions(src: MediaDimensions | null): MediaDimensions {
+export type CanvasOrientationOverride = "auto" | "portrait" | "landscape" | "square";
+
+const ORIENTATION_PRESETS: Record<Exclude<CanvasOrientationOverride, "auto">, MediaDimensions> = {
+  portrait:  { width: 1080, height: 1920 }, // 9:16
+  landscape: { width: 1920, height: 1080 }, // 16:9
+  square:    { width: 1080, height: 1080 }, // 1:1
+};
+
+/**
+ * Pick the canvas size for preview + render. Honours the user's
+ * `orientation` choice from the upload modal first; falls back to
+ * source-aspect autodetect when orientation is "auto" (default).
+ * Audio uploads (or unprobed sources) default to a 9:16 reel canvas
+ * because that's still the most common output format.
+ */
+export function pickCanvasDimensions(
+  src: MediaDimensions | null,
+  orientation: CanvasOrientationOverride = "auto"
+): MediaDimensions {
+  if (orientation !== "auto") {
+    return ORIENTATION_PRESETS[orientation];
+  }
   if (!src || src.width === 0 || src.height === 0) {
     return { width: 1080, height: 1920 };
   }
