@@ -873,9 +873,38 @@ export function Timeline({
             </div>
 
             {/* ── Track 1: Captions (chips) ──────────────────── */}
+            {/* Double-click an empty area of this track to insert a new
+                word at that timestamp. The new word lands at the
+                clicked position with a 0.4s default duration and
+                placeholder text the user immediately edits in
+                CaptionsList. Saves users the "transcribe missed a
+                word" round-trip — they just drop it in and rename. */}
             <div
               className="relative border-b border-[var(--border)] bg-[var(--bg)]"
               style={{ height: `${trackHeights.captions}px` }}
+              onDoubleClick={(e) => {
+                if (!onWordsChange) return;
+                // Only handle if the user double-clicked the track
+                // itself, not a child chip — chips do their own click.
+                if (e.target !== e.currentTarget) return;
+                const rect = e.currentTarget.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const sec = Math.max(0, Math.min(durationSec, x / pxPerSec));
+                const newWord: WhisperWord = {
+                  word: "new",
+                  start: sec,
+                  end: Math.min(durationSec, sec + 0.4),
+                };
+                // Insert at the correct sorted-by-start position so
+                // groupWordsIntoLines + PhraseCaption see a clean
+                // monotonic sequence.
+                const next = words.slice();
+                let insertAt = next.findIndex((w) => w.start > sec);
+                if (insertAt < 0) insertAt = next.length;
+                next.splice(insertAt, 0, newWord);
+                onWordsChange(next);
+              }}
+              title={onWordsChange ? "Double-click to add a new word here" : undefined}
             >
               {chipMode === "word"
                 ? words.map((w, i) => {
