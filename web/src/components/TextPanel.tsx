@@ -82,6 +82,38 @@ export function TextPanel({ base, overrides, onChange, onReset, userFonts, onUse
     setPresets(listTextPresets());
   }, []);
 
+  // ── System fonts — enumerate the user's installed fonts via the
+  // Local Font Access API (Chromium 103+, which is what Electron ships).
+  // Result populates a new "System Fonts" optgroup in the font picker
+  // so users can use any font already on their machine without having
+  // to upload it as a .ttf/.otf first.
+  const [systemFonts, setSystemFonts] = useState<string[]>([]);
+  useEffect(() => {
+    // Type the API loosely — TS lib.dom doesn't ship the Local Font
+    // Access API yet. Feature-detect via `in window` first.
+    const w = window as unknown as {
+      queryLocalFonts?: () => Promise<Array<{ family: string }>>;
+    };
+    if (typeof w.queryLocalFonts !== "function") return;
+    w.queryLocalFonts()
+      .then((data) => {
+        // De-dup by family name (the API yields one entry per face).
+        const families = new Set<string>();
+        for (const f of data) {
+          if (f?.family) families.add(f.family);
+        }
+        const sorted = Array.from(families).sort((a, b) =>
+          a.localeCompare(b, undefined, { sensitivity: "base" })
+        );
+        setSystemFonts(sorted);
+      })
+      .catch((err) => {
+        // Permission denied / API blocked — silently skip; the
+        // bundled + uploaded font sections still work as before.
+        console.warn("[TextPanel] queryLocalFonts failed:", err);
+      });
+  }, []);
+
   const handleSavePreset = () => {
     const name = window.prompt("Preset name (will overwrite if it exists):");
     if (!name || !name.trim()) return;
@@ -332,6 +364,23 @@ export function TextPanel({ base, overrides, onChange, onReset, userFonts, onUse
                     style={{ fontFamily: `'${font.family}', sans-serif` }}
                   >
                     {font.family}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+            {systemFonts.length > 0 && (
+              // System fonts pulled at mount time via the Local Font
+              // Access API. Falls before the bundled catalogue so users
+              // see their installed fonts first — that's typically what
+              // they reach for once "My Fonts" is empty.
+              <optgroup label="System Fonts">
+                {systemFonts.map((family) => (
+                  <option
+                    key={`sys-${family}`}
+                    value={`'${family.replace(/'/g, "\\'")}', sans-serif`}
+                    style={{ fontFamily: `'${family}', sans-serif` }}
+                  >
+                    {family}
                   </option>
                 ))}
               </optgroup>

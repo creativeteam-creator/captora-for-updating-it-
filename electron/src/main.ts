@@ -80,6 +80,28 @@ async function createWindow(): Promise<void> {
     },
   });
 
+  // Auto-grant the Local Font Access API permission so the TextPanel's
+  // queryLocalFonts() call succeeds without prompting the user. We're
+  // inside our own Electron shell — the "local-fonts" capability isn't
+  // a privacy concern here; we just want the user's installed font
+  // list to show up in the font picker alongside bundled + uploaded
+  // fonts.
+  mainWindow.webContents.session.setPermissionRequestHandler(
+    (_webContents, permission, callback) => {
+      // `permission` is typed as a closed union that doesn't yet
+      // include "local-fonts" in older @types/electron; cast to
+      // `string` for the comparison and accept either spelling
+      // Chromium/Electron versions may use.
+      const name = permission as string;
+      if (name === "local-fonts" || name === "fontAccess") {
+        callback(true);
+        return;
+      }
+      // Fall through: deny everything else (default-safe).
+      callback(false);
+    }
+  );
+
   mainWindow.once("ready-to-show", () => {
     mainWindow?.show();
     // Open DevTools in production too — early-version users will hit
