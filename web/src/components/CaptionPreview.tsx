@@ -78,6 +78,11 @@ interface Props {
   lineStyles?: Record<string, CaptionStyle>;
   /** Per-word fontSize multipliers (centisecond-keyed, 1.0 = default). */
   wordSizes?: Record<string, number>;
+  /** User-forced line breaks: word indexes after which the captions
+   *  grouper must start a new line. Travels as number[] across the
+   *  Remotion bundle prop boundary; CaptionsTimeline rebuilds the
+   *  Set on the receiving side. */
+  userBreaks?: number[];
   /** Optional ref the parent passes in so the new Timeline can read the
    *  Player's current frame and seek to a given frame on click. */
   playerRef?: React.Ref<PlayerRef>;
@@ -98,7 +103,7 @@ interface Props {
 export function CaptionPreview({
   file, ext, style, computedStyle, words, durationSec, userFonts,
   width = DEFAULT_WIDTH, height = DEFAULT_HEIGHT,
-  lineAnimations, lineStyles, wordSizes, playerRef,
+  lineAnimations, lineStyles, wordSizes, userBreaks, playerRef,
   dragModeActive, onPositionChange,
 }: Props) {
   // Drag overlay — captures pointer events while `dragModeActive` is true
@@ -208,8 +213,9 @@ export function CaptionPreview({
       lineAnimations,
       lineStyles,
       wordSizes,
+      userBreaks,
     }),
-    [playableWords, isAudio, blobUrl, durationSec, computedStyle, customFonts, width, height, lineAnimations, lineStyles, wordSizes]
+    [playableWords, isAudio, blobUrl, durationSec, computedStyle, customFonts, width, height, lineAnimations, lineStyles, wordSizes, userBreaks]
   );
 
   const durationInFrames = Math.max(1, Math.ceil((durationSec || 1) * FPS));

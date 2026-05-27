@@ -19,6 +19,11 @@ interface Props {
    *  centiseconds. Forwarded to PhraseCaption so it can resize specific
    *  words inline without affecting the rest of the line. */
   wordSizes?: Record<string, number>;
+  /** User-forced line breaks: word indexes after which the grouper
+   *  starts a new line. Travels in as `number[]` (Set isn't JSON-
+   *  serialisable through the Remotion bundle prop boundary) and is
+   *  rebuilt into a Set before passing to groupWordsIntoLines. */
+  userBreaks?: number[];
 }
 
 /** Build the centisecond key matching the writer side (page.tsx). */
@@ -91,9 +96,15 @@ function resolveLineStyle(
  * The cycling is deterministic, so re-rendering the same audio always
  * produces the same animation order — useful for previews matching MP4s.
  */
-export function CaptionsTimeline({ words, style, lineAnimations, lineStyles, wordSizes }: Props) {
+export function CaptionsTimeline({ words, style, lineAnimations, lineStyles, wordSizes, userBreaks }: Props) {
   const { fps } = useVideoConfig();
-  const lines = groupWordsIntoLines(words);
+  // Rebuild the userBreaks Set inside the composition so the renderer's
+  // grouper produces the same line splits the editor's captions list
+  // displayed. Prop comes in as `number[]` because the Remotion bundle
+  // prop bridge doesn't serialise Set instances.
+  const breaksSet =
+    userBreaks && userBreaks.length > 0 ? new Set(userBreaks) : undefined;
+  const lines = groupWordsIntoLines(words, { userBreaks: breaksSet });
 
   return (
     <AbsoluteFill style={{ backgroundColor: "transparent" }}>

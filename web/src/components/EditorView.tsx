@@ -494,6 +494,7 @@ export function EditorView({
               lineAnimations={lineAnimations}
               lineStyles={computedLineStyles}
               wordSizes={wordSizes}
+              userBreaks={Array.from(userBreaks)}
               playerRef={playerRef}
               dragModeActive={dragModeActive}
               onPositionChange={handleCaptionDrag}

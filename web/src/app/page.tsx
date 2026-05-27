@@ -506,6 +506,11 @@ export default function Home() {
           height: canvasDims.height,
           lineAnimations,
           lineStyles: computedLineStyles,
+          // Serialise the userBreaks Set as an array for transport —
+          // /api/render reads it back into the composition inputProps
+          // so the rendered MP4 honours the same line splits the
+          // captions list displays in the editor.
+          userBreaks: Array.from(userBreaks),
         }),
       });
       if (!res.ok) {

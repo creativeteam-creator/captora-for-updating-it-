@@ -145,6 +145,14 @@ interface RenderBody {
    */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   lineStyles?: Record<string, any>;
+  /**
+   * User-forced line breaks: indexes in `words[]` after which the
+   * captions grouper must start a new line. Arrived as `number[]`
+   * (Set is not JSON-serialisable). Forwarded straight into the
+   * composition inputProps — CaptionsTimeline rebuilds the Set on
+   * the receiving side.
+   */
+  userBreaks?: number[];
 }
 
 /**
@@ -202,7 +210,7 @@ export async function POST(req: NextRequest) {
 
     // ───── Parse + validate body ─────
     const body = (await req.json()) as RenderBody;
-    const { projectId, ext, style, words, durationSec, computedStyle, transparent, customFonts, width, height, lineAnimations, lineStyles } = body;
+    const { projectId, ext, style, words, durationSec, computedStyle, transparent, customFonts, width, height, lineAnimations, lineStyles, userBreaks } = body;
     if (!projectId || !ext || !style || !Array.isArray(words)) {
       return NextResponse.json(
         { ok: false, error: "Missing required fields: projectId, ext, style, words" },
@@ -291,6 +299,12 @@ export async function POST(req: NextRequest) {
         lineStyles && typeof lineStyles === "object" && Object.keys(lineStyles).length > 0
           ? lineStyles
           : undefined,
+      // User-forced line breaks (Item 4). Arrives as a number[]; the
+      // composition rebuilds the Set inside CaptionsTimeline before
+      // passing to groupWordsIntoLines so the rendered MP4 splits at
+      // exactly the same word indexes the captions list displayed.
+      userBreaks:
+        Array.isArray(userBreaks) && userBreaks.length > 0 ? userBreaks : undefined,
     };
     console.log(
       `[/api/render] canvas: ${inputProps.width ?? "default"}×${inputProps.height ?? "default"}`

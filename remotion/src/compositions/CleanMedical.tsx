@@ -7,7 +7,7 @@ import { resolveSrc } from "../lib/resolveSrc";
 import { CaptionsCompositionProps } from "../types";
 
 export const CleanMedical: React.FC<CaptionsCompositionProps> = ({
-  words, videoSrc, audioSrc, style, transparentBackground, customFonts, lineAnimations, lineStyles, wordSizes,
+  words, videoSrc, audioSrc, style, transparentBackground, customFonts, lineAnimations, lineStyles, wordSizes, userBreaks,
 }) => {
   const finalStyle = style ?? CAPTION_STYLES["clean-medical"];
   const showVideo = !transparentBackground && videoSrc;
@@ -26,6 +26,7 @@ export const CleanMedical: React.FC<CaptionsCompositionProps> = ({
         lineAnimations={lineAnimations}
         lineStyles={lineStyles}
         wordSizes={wordSizes}
+        userBreaks={userBreaks}
       />
     </AbsoluteFill>
   );

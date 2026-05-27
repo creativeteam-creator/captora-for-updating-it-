@@ -92,4 +92,12 @@ export interface CaptionsCompositionProps {
    * the start time) so the override survives caption tweaks.
    */
   wordSizes?: Record<string, number>;
+  /**
+   * User-forced line breaks: indexes in `words[]` after which the
+   * captions grouper must start a new line. Travels as `number[]`
+   * (Set isn't JSON-serialisable across the Remotion bundle prop
+   * boundary). When omitted, the grouper falls back to its natural
+   * pause / word-count / duration heuristics only.
+   */
+  userBreaks?: number[];
 }
