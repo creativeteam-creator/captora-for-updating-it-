@@ -52,6 +52,12 @@ interface Props {
   selectedLineKey?: string | null;
   /** Selection callback — pass `null` to clear the current selection. */
   onSelectLine?: (key: string | null) => void;
+  /** User-forced line breaks: word indexes after which the captions
+   *  grouper must start a new line. Edited from the timeline strip
+   *  via a hover-revealed ⏎ control on each word chip. Same store
+   *  the CaptionsList uses, so both surfaces stay in sync. */
+  userBreaks?: Set<number>;
+  onUserBreaksChange?: (next: Set<number>) => void;
 }
 
 const FPS_DEFAULT = 30;
@@ -98,6 +104,8 @@ export function Timeline({
   file,
   selectedLineKey,
   onSelectLine,
+  userBreaks,
+  onUserBreaksChange,
 }: Props) {
   const stripRef = useRef<HTMLDivElement>(null);
   const [currentSec, setCurrentSec] = useState(0);
@@ -961,6 +969,38 @@ export function Timeline({
                             aria-label={`Drag to retime word ${i + 1} end`}
                           />
                         )}
+                        {/* Line-break toggle — same userBreaks store as
+                            the captions-list ⏎ control, so editing on
+                            either surface stays in sync. Positioned
+                            just outside the chip's right edge so it
+                            sits in the gap to the next chip and never
+                            collides with the drag handle. Visible on
+                            hover; pinned visible (green) when a break
+                            is already set after this word. */}
+                        {onUserBreaksChange && i < words.length - 1 && (() => {
+                          const breakSet = userBreaks?.has(i) ?? false;
+                          return (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const next = new Set(userBreaks ?? []);
+                                if (next.has(i)) next.delete(i);
+                                else next.add(i);
+                                onUserBreaksChange(next);
+                              }}
+                              className={`absolute left-full top-1/2 z-30 -translate-y-1/2 ml-0.5 flex h-3.5 w-3.5 items-center justify-center rounded border text-[8px] leading-none transition ${
+                                breakSet
+                                  ? "border-[var(--accent)] bg-[var(--accent)] text-black opacity-100"
+                                  : "border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[var(--text-muted)] opacity-0 hover:border-[var(--accent)] hover:text-[var(--accent)] group-hover:opacity-100"
+                              }`}
+                              title={breakSet ? "Remove line break here" : "Break line after this word"}
+                              aria-label={`Toggle line break after word ${i + 1}`}
+                            >
+                              ⏎
+                            </button>
+                          );
+                        })()}
                       </div>
                     );
                   })

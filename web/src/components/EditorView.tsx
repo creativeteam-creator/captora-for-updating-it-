@@ -604,6 +604,8 @@ export function EditorView({
           file={file}
           selectedLineKey={selectedLineKey}
           onSelectLine={onSelectLine}
+          userBreaks={userBreaks}
+          onUserBreaksChange={onUserBreaksChange}
         />
 
         {exportError && (
