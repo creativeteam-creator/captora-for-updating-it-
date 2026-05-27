@@ -29,7 +29,8 @@ export type CaptionStyleId =
   // ── Kalakar-clone templates (Phase B) ────────────────────────
   | "hormozi"
   | "mr-beast"
-  | "bubble-style";
+  | "bubble-style"
+  | "editing-skool";
 
 export type RGB = [number, number, number];
 
@@ -114,6 +115,17 @@ export interface CaptionStyle {
    * line of words with a single green pill around the spoken word.
    */
   perWordChipActiveOnly?: boolean;
+  /**
+   * When true, every word EXCEPT the active one is removed from the
+   * render — single-word-focus mode where only the spoken word is
+   * visible on screen. Drives the "Editing Skool" Kalakar look: a
+   * single orange sticker with one word at a time that swaps as
+   * playback advances. Uses display:none on inactives so the parent
+   * flex centers the lone active word naturally — keeps the chip
+   * planted at the chosen vertical position instead of drifting with
+   * each phrase's word count.
+   */
+  activeWordOnly?: boolean;
   /**
    * Per-word entrance animation. Drives the way each word "lands" on
    * screen at its own `word.start` time — independent of the phrase
@@ -524,6 +536,47 @@ export const CAPTION_STYLES: Record<CaptionStyleId, CaptionStyle> = {
     dropShadowOffsetX: 0,
     dropShadowOffsetY: 4,
     glowMode: "none",
+  },
+  "editing-skool": {
+    id: "editing-skool",
+    label: "Editing Skool",
+    isNew: true,
+    // Single-word focus: only the spoken word is on screen at any
+    // moment, wrapped in a bright orange rounded box. White text
+    // inside the chip. Modelled on Kalakar's "Editing Skool" preview
+    // showing the lone word `fox` in an orange sticker — captions
+    // feel like punchy individual labels rather than a flowing line.
+    baseColor: [1, 1, 1],
+    // Bright Kalakar-style orange (≈ #F58A1F) — same as screenshot.
+    highlightColor: [0.96, 0.54, 0.12],
+    popInDurationSec: 0.10,
+    fontFamily: "Inter, 'SF Pro Text', Montserrat, sans-serif",
+    fontSize: 80,
+    strokeWidth: 0,
+    shadowOpacity: 0.50,
+    verticalPosition: 0.78,
+    textCase: "sentence",
+    bold: true,
+    letterSpacing: 0,
+    lineHeight: 1.0,
+    // The two defining traits:
+    //  1. activeWordOnly hides every other word in the phrase so the
+    //     orange sticker is the only thing on screen at any frame.
+    //  2. perWordChip + perWordChipActiveOnly draws the chip ONLY on
+    //     the active word (which is the only visible word anyway, but
+    //     keeps the renderer's chip code path consistent).
+    activeWordOnly: true,
+    perWordChip: { paddingX: 22, paddingY: 10, radius: 12 },
+    perWordChipActiveOnly: true,
+    dropShadowColor: [0, 0, 0],
+    dropShadowBlur: 16,
+    dropShadowOffsetX: 0,
+    dropShadowOffsetY: 6,
+    glowMode: "none",
+    // Pop entrance keeps each word landing with snap — fits the
+    // sticker-label aesthetic better than a fade or slide.
+    wordEntrance: "pop",
+    wordEntranceDurationSec: 0.18,
   },
 };
 

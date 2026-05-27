@@ -271,6 +271,11 @@ export function PhraseCaption({ words, phraseStartSec, style, variant = "pop", p
         const i = rowStartIdx[rowIdx] + jRel;
         const w = wordRel;
         const isActive = i === activeIdx;
+        // Editing Skool / single-word-focus mode: render only the
+        // active word; skip the rest entirely so the lone chip stays
+        // centered by the parent flex instead of drifting with the
+        // phrase's natural left-padded layout.
+        if (style.activeWordOnly && !isActive) return null;
         const inactiveColor = style.boxBackground ? inactiveBoxColor : baseColor;
 
         const useGradient = isActive && style.highlightGradient && !style.boxBackground;
