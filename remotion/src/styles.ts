@@ -30,7 +30,16 @@ export type CaptionStyleId =
   | "hormozi"
   | "mr-beast"
   | "bubble-style"
-  | "editing-skool";
+  | "editing-skool"
+  | "liquid-glass"
+  | "pixelated-word"
+  | "ziada"
+  | "top-up"
+  | "splash"
+  | "highlight-word"
+  | "kalakar"
+  | "kalakar-shadow"
+  | "named-style";
 
 export type RGB = [number, number, number];
 
@@ -94,8 +103,27 @@ export interface CaptionStyle {
   glowOnActive?: boolean;
   /** Two-tone gradient on the active word — top → bottom of the glyph. */
   highlightGradient?: { from: RGB; to: RGB };
-  /** Wrap the whole phrase in a rounded coloured pill (Submagic / Ali Abdaal look). */
-  boxBackground?: { color: RGB; paddingX: number; paddingY: number; radius: number };
+  /** Wrap the whole phrase in a rounded coloured pill (Submagic / Ali
+   *  Abdaal look). `opacity` (0–1, default 1) makes the pill translucent
+   *  for glassmorphism; `backdropBlur` (px) frosts whatever is behind
+   *  the pill — the two together drive the "Liquid Glass" Kalakar look.
+   */
+  boxBackground?: {
+    color: RGB;
+    paddingX: number;
+    paddingY: number;
+    radius: number;
+    opacity?: number;
+    backdropBlur?: number;
+  };
+  /**
+   * Multiplier applied to the active word's fontSize so it renders
+   * noticeably larger than its neighbours — drives the "Splash"
+   * Kalakar look where the spoken word jumps out at ~2× scale. Set
+   * to 1 (default) to disable. Compounds with the active-word
+   * highlight scale handled inside PhraseCaption.
+   */
+  activeWordSizeMultiplier?: number;
   /**
    * Inactive-word colour for the boxed look (typically a dim grey so the
    * active word reads as the focus). Falls back to baseColor when absent.
@@ -535,6 +563,254 @@ export const CAPTION_STYLES: Record<CaptionStyleId, CaptionStyle> = {
     dropShadowBlur: 12,
     dropShadowOffsetX: 0,
     dropShadowOffsetY: 4,
+    glowMode: "none",
+  },
+  "liquid-glass": {
+    id: "liquid-glass",
+    label: "Liquid Glass",
+    isNew: true,
+    // Frosted-glass pill — modern iOS / glassmorphism look. The pill
+    // is translucent white over a backdrop-blur so the video bleeds
+    // through softly. Text is white inside, active word flips to a
+    // gentle accent. Matches Kalakar's "Liquid Glass" preview.
+    baseColor: [1, 1, 1],
+    highlightColor: [1, 1, 1],
+    popInDurationSec: 0.14,
+    fontFamily: "Inter, 'SF Pro Text', sans-serif",
+    fontSize: 60,
+    strokeWidth: 0,
+    shadowOpacity: 0.25,
+    verticalPosition: 0.72,
+    textCase: "sentence",
+    bold: false,
+    boxBackground: {
+      color: [1, 1, 1],
+      paddingX: 32,
+      paddingY: 14,
+      radius: 999, // pill (fully rounded)
+      opacity: 0.18,
+      backdropBlur: 24,
+    },
+    boxInactiveColor: [0.7, 0.7, 0.75],
+    glowMode: "none",
+  },
+  "pixelated-word": {
+    id: "pixelated-word",
+    label: "Pixelated Word",
+    isNew: true,
+    // 8-bit / retro pixel font, all caps white. Falls back through a
+    // chain of pixel-style web fonts; if none are loaded (uncommon)
+    // it lands on monospace which still preserves the chunky vibe.
+    baseColor: [1, 1, 1],
+    highlightColor: [1.0, 0.95, 0.0],
+    popInDurationSec: 0.06,
+    fontFamily: "'Press Start 2P', 'VT323', 'Silkscreen', 'Courier New', monospace",
+    fontSize: 64,
+    strokeWidth: 4,
+    shadowOpacity: 0.4,
+    verticalPosition: 0.72,
+    textCase: "upper",
+    bold: false, // pixel fonts already heavy; bold can break rendering
+    letterSpacing: 2,
+    lineHeight: 1.0,
+    dropShadowColor: [0, 0, 0],
+    dropShadowBlur: 0,
+    dropShadowOffsetX: 4,
+    dropShadowOffsetY: 4,
+    glowMode: "none",
+  },
+  ziada: {
+    id: "ziada",
+    label: "Ziada",
+    isNew: true,
+    // White text inside a solid black pill — Submagic-style stacked
+    // labels (the Kalakar preview shows two rows: "The quick brown"
+    // / "fox jumps over"). The black background isolates the caption
+    // from any underlying footage.
+    baseColor: [1, 1, 1],
+    highlightColor: [1, 1, 1],
+    popInDurationSec: 0.16,
+    fontFamily: "Inter, 'SF Pro Text', sans-serif",
+    fontSize: 58,
+    strokeWidth: 0,
+    shadowOpacity: 0.55,
+    verticalPosition: 0.78,
+    textCase: "sentence",
+    bold: true,
+    letterSpacing: 0,
+    lineHeight: 1.25,
+    boxBackground: {
+      color: [0.05, 0.05, 0.08],
+      paddingX: 28,
+      paddingY: 12,
+      radius: 999,
+      opacity: 0.95,
+    },
+    boxInactiveColor: [0.65, 0.65, 0.7],
+    glowMode: "none",
+  },
+  "top-up": {
+    id: "top-up",
+    label: "Top Up",
+    isNew: true,
+    // Clean white sentence-case line with a warm orange-yellow active
+    // word — Kalakar's preview shows `The quick [brown] [fox]` with
+    // the highlight on the last two words simultaneously, but our
+    // per-frame active highlight gives the same overall feel as the
+    // spoken word travels through.
+    baseColor: [1, 1, 1],
+    highlightColor: [1.0, 0.72, 0.0], // amber-gold
+    popInDurationSec: 0.14,
+    fontFamily: "Inter, 'SF Pro Text', Helvetica, sans-serif",
+    fontSize: 70,
+    strokeWidth: 0,
+    shadowOpacity: 0.4,
+    verticalPosition: 0.5, // upper-center placement ("top" of frame)
+    textCase: "sentence",
+    bold: true,
+    letterSpacing: 0,
+    lineHeight: 1.15,
+    glowMode: "active",
+    glowColor: [1.0, 0.72, 0.0],
+    glowBlur: 18,
+    dropShadowColor: [0, 0, 0],
+    dropShadowBlur: 16,
+    dropShadowOffsetX: 0,
+    dropShadowOffsetY: 4,
+  },
+  splash: {
+    id: "splash",
+    label: "Splash",
+    isNew: true,
+    // Active word renders MUCH larger than its neighbours — the
+    // spoken token visually "splashes" forward. The Kalakar preview
+    // shows the active word at ~1.8× the rest, in a vivid accent
+    // colour. Other words stay white at the base size.
+    baseColor: [1, 1, 1],
+    highlightColor: [0.97, 0.93, 0.18], // bright yellow-lime
+    popInDurationSec: 0.12,
+    fontFamily: "Anton, Bebas Neue, Montserrat, Inter, sans-serif",
+    fontSize: 64,
+    strokeWidth: 2,
+    shadowOpacity: 0.5,
+    verticalPosition: 0.7,
+    textCase: "upper",
+    bold: true,
+    letterSpacing: 1,
+    lineHeight: 0.95,
+    activeWordSizeMultiplier: 1.85,
+    glowMode: "active",
+    glowColor: [0.97, 0.93, 0.18],
+    glowBlur: 28,
+    dropShadowColor: [0, 0, 0],
+    dropShadowBlur: 12,
+    dropShadowOffsetX: 0,
+    dropShadowOffsetY: 4,
+    wordEntrance: "pop",
+    wordEntranceDurationSec: 0.18,
+  },
+  "highlight-word": {
+    id: "highlight-word",
+    label: "Highlight Word",
+    isNew: true,
+    // Minimal: white inactive, yellow active. No box, no glow, just
+    // pure colour-flip on the spoken word. The Kalakar reference
+    // shows `aayega aapko.` with `aayega` in yellow — the simplest
+    // possible "follow the spoken word" caption.
+    baseColor: [1, 1, 1],
+    highlightColor: [1.0, 0.95, 0.0],
+    popInDurationSec: 0.10,
+    fontFamily: "Inter, 'SF Pro Text', sans-serif",
+    fontSize: 68,
+    strokeWidth: 0,
+    shadowOpacity: 0.45,
+    verticalPosition: 0.72,
+    textCase: "sentence",
+    bold: true,
+    letterSpacing: 0,
+    lineHeight: 1.1,
+    dropShadowColor: [0, 0, 0],
+    dropShadowBlur: 14,
+    dropShadowOffsetX: 0,
+    dropShadowOffsetY: 4,
+    glowMode: "none",
+  },
+  kalakar: {
+    id: "kalakar",
+    label: "Kalakar",
+    isNew: true,
+    // Kalakar's own signature template — bright yellow active word
+    // on white base, big condensed font, glow. Modelled on the
+    // "Kalakar" card showing the yellow "welcome" preview text.
+    baseColor: [1, 1, 1],
+    highlightColor: [1.0, 0.92, 0.08],
+    popInDurationSec: 0.12,
+    fontFamily: "Anton, Bebas Neue, Montserrat, Inter, sans-serif",
+    fontSize: 96,
+    strokeWidth: 4,
+    shadowOpacity: 0.6,
+    verticalPosition: 0.65,
+    textCase: "upper",
+    bold: true,
+    letterSpacing: 1,
+    lineHeight: 1.0,
+    glowMode: "active",
+    glowColor: [1.0, 0.92, 0.08],
+    glowBlur: 28,
+    dropShadowColor: [0, 0, 0],
+    dropShadowBlur: 16,
+    dropShadowOffsetX: 0,
+    dropShadowOffsetY: 6,
+  },
+  "kalakar-shadow": {
+    id: "kalakar-shadow",
+    label: "Kalakar Shadow",
+    isNew: true,
+    // Kalakar Shadow — red WELCOME with heavy dropped shadow. White
+    // base, red active word; the defining trait is the long, sharp
+    // black shadow that sits behind the type giving it 3D weight.
+    baseColor: [1, 1, 1],
+    highlightColor: [0.95, 0.12, 0.12], // bright red
+    popInDurationSec: 0.12,
+    fontFamily: "Anton, Bebas Neue, Impact, Montserrat, Inter, sans-serif",
+    fontSize: 100,
+    strokeWidth: 2,
+    shadowOpacity: 1.0,
+    verticalPosition: 0.65,
+    textCase: "upper",
+    bold: true,
+    letterSpacing: 1,
+    lineHeight: 1.0,
+    dropShadowColor: [0, 0, 0],
+    dropShadowBlur: 0, // sharp, no blur — the 3D shadow effect
+    dropShadowOffsetX: 8,
+    dropShadowOffsetY: 10,
+    glowMode: "none",
+  },
+  "named-style": {
+    id: "named-style",
+    label: "Named Style",
+    isNew: true,
+    // Bold uppercase with WIDE letter spacing — the defining trait.
+    // White text, soft accent on active word. Kalakar's "Named Style"
+    // preview emphasised the spacious tracking giving the caption a
+    // magazine-headline feel.
+    baseColor: [1, 1, 1],
+    highlightColor: [0.85, 0.85, 0.85], // subtle grey-white shift
+    popInDurationSec: 0.18,
+    fontFamily: "Inter, 'SF Pro Display', Helvetica, sans-serif",
+    fontSize: 56,
+    strokeWidth: 0,
+    shadowOpacity: 0.35,
+    verticalPosition: 0.72,
+    textCase: "upper",
+    bold: true,
+    letterSpacing: 8, // the signature — wide spacious tracking
+    lineHeight: 1.1,
+    dropShadowColor: [0, 0, 0],
+    dropShadowBlur: 10,
+    dropShadowOffsetX: 0,
+    dropShadowOffsetY: 3,
     glowMode: "none",
   },
   "editing-skool": {

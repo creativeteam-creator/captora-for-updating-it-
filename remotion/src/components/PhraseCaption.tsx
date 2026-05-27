@@ -168,12 +168,30 @@ export function PhraseCaption({ words, phraseStartSec, style, variant = "pop", p
     : phraseShadows.length > 0 ? phraseShadows.join(", ") : "none";
 
   const boxStyle: React.CSSProperties | undefined = style.boxBackground
-    ? {
-        backgroundColor: rgbToCss(style.boxBackground.color),
-        padding: `${style.boxBackground.paddingY}px ${style.boxBackground.paddingX}px`,
-        borderRadius: style.boxBackground.radius,
-        boxShadow: `0 8px 32px rgba(0, 0, 0, ${style.shadowOpacity})`,
-      }
+    ? (() => {
+        const bg = style.boxBackground;
+        // Translucent glass pill: build rgba from the RGB + optional
+        // opacity so the pill lets the video through. Default opacity
+        // 1 keeps the legacy solid-pill behaviour.
+        const op = bg.opacity ?? 1;
+        const r = Math.round(bg.color[0] * 255);
+        const g = Math.round(bg.color[1] * 255);
+        const b = Math.round(bg.color[2] * 255);
+        const bgColor = op >= 1 ? rgbToCss(bg.color) : `rgba(${r}, ${g}, ${b}, ${op})`;
+        const s: React.CSSProperties = {
+          backgroundColor: bgColor,
+          padding: `${bg.paddingY}px ${bg.paddingX}px`,
+          borderRadius: bg.radius,
+          boxShadow: `0 8px 32px rgba(0, 0, 0, ${style.shadowOpacity})`,
+        };
+        // Glassmorphism — frosts the video behind the pill. Used by
+        // Liquid Glass; ignored when unset.
+        if (bg.backdropBlur && bg.backdropBlur > 0) {
+          s.backdropFilter = `blur(${bg.backdropBlur}px)`;
+          (s as Record<string, unknown>).WebkitBackdropFilter = `blur(${bg.backdropBlur}px)`;
+        }
+        return s;
+      })()
     : undefined;
 
   // When the template uses per-word entrances, suppress the phrase-level
@@ -313,12 +331,20 @@ export function PhraseCaption({ words, phraseStartSec, style, variant = "pop", p
 
         // Per-word fontSize multiplier — keyed by `(word.start * 100) | 0`
         // centiseconds. Default 1.0 = use the inherited phrase fontSize.
+        // `activeWordSizeMultiplier` (template-level) compounds: when the
+        // word is the active one, multiply its rendered size by that
+        // factor too. Drives the "Splash" Kalakar look where the
+        // spoken word jumps out at ~1.8× scale.
         const wordKey = String((w.start * 100) | 0);
         const wordSizeMul = wordSizes?.[wordKey];
+        const activeMul =
+          isActive && style.activeWordSizeMultiplier && style.activeWordSizeMultiplier > 0
+            ? style.activeWordSizeMultiplier
+            : 1;
+        const combinedMul =
+          (typeof wordSizeMul === "number" && wordSizeMul > 0 ? wordSizeMul : 1) * activeMul;
         const perWordFontSize =
-          typeof wordSizeMul === "number" && wordSizeMul > 0
-            ? style.fontSize * wordSizeMul
-            : undefined;
+          combinedMul !== 1 ? style.fontSize * combinedMul : undefined;
 
         const wordStyle: React.CSSProperties = {
           color: isActive ? highlightColor : inactiveColor,
