@@ -25,7 +25,9 @@ export type CaptionStyleId =
   | "slide-cascade"
   | "blur-reveal"
   | "drop-stack"
-  | "rotate-flair";
+  | "rotate-flair"
+  // ── Kalakar-clone templates (Phase B, iter 1) ────────────────
+  | "hormozi";
 
 export type RGB = [number, number, number];
 
@@ -412,6 +414,40 @@ export const CAPTION_STYLES: Record<CaptionStyleId, CaptionStyle> = {
     wordEntrance: ["rotate", "pop", "scale", "rotate"],
     wordEntranceDurationSec: 0.20,
     rowAlignment: "stagger",
+  },
+  // ─── Kalakar-clone templates (Phase B) ─────────────────────────────────
+  // Modelled directly on the user-supplied Kalakar editor screenshots so
+  // each new template is a 1:1 visual + motion match for what Kalakar
+  // ships under the same name. Iter 1 = Hormozi.
+  hormozi: {
+    id: "hormozi",
+    label: "Hormozi",
+    isNew: true,
+    // White base, sharp lime-yellow active word — the canonical Alex
+    // Hormozi short-form caption look. Big heavy condensed font with a
+    // strong matching glow on the active token so single words read at
+    // a glance even on a phone scrubbing through Reels.
+    baseColor: [1, 1, 1],
+    highlightColor: [0.80, 1.0, 0.05], // ~#CBFF0D
+    popInDurationSec: 0.10,
+    fontFamily: "Anton, Bebas Neue, Druk, Montserrat, Inter, sans-serif",
+    fontSize: 110,
+    strokeWidth: 6,
+    shadowOpacity: 0.55,
+    verticalPosition: 0.62,
+    textCase: "upper",
+    bold: true,
+    letterSpacing: 1,
+    lineHeight: 0.95,
+    glowMode: "active",
+    glowColor: [0.80, 1.0, 0.05],
+    glowBlur: 36,
+    dropShadowColor: [0, 0, 0],
+    dropShadowBlur: 18,
+    dropShadowOffsetX: 0,
+    dropShadowOffsetY: 6,
+    wordEntrance: "pop",
+    wordEntranceDurationSec: 0.16,
   },
 };
 
