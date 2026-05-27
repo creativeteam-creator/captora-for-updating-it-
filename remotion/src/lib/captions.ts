@@ -47,8 +47,17 @@ export function groupWordsIntoLines(
     const forcedBreak =
       current.length > 0 && userBreaks ? userBreaks.has(i - 1) : false;
 
+    // Auto sentence-end break (mirror of web/captions.ts): break when
+    // the previous word ended in .?!।| — keeps the renderer in lockstep
+    // with the editor's display whenever the LLM polish step has
+    // inserted proper sentence punctuation.
+    const prevWord = prev?.word ?? "";
+    const sentenceEndBreak =
+      current.length > 0 && /[.!?।|]+\s*$/.test(prevWord);
+
     const shouldBreak =
       forcedBreak ||
+      sentenceEndBreak ||
       (current.length > 0 &&
         (gap > pauseThresholdSec ||
           current.length >= maxWordsPerLine ||

@@ -63,8 +63,19 @@ export function groupWordsIntoLines(
     const forcedBreak =
       current.length > 0 && userBreaks ? userBreaks.has(i - 1) : false;
 
+    // Auto sentence-end break: if the previous word's text ends in a
+    // sentence-terminating mark (.?! plus Devanagari danda ।, ElevenLabs's
+    // pipe |), break the line after it. Lets the grouper respect natural
+    // sentence boundaries even when the audio gap was tight — typical
+    // Hindi/Hinglish where speakers chain sentences with no pause but
+    // the LLM polish still inserts proper punctuation.
+    const prevWord = prev?.word ?? "";
+    const sentenceEndBreak =
+      current.length > 0 && /[.!?।|]+\s*$/.test(prevWord);
+
     const shouldBreak =
       forcedBreak ||
+      sentenceEndBreak ||
       (current.length > 0 &&
         (gap > pauseThresholdSec ||
           current.length >= maxWordsPerLine ||
