@@ -28,7 +28,8 @@ export type CaptionStyleId =
   | "rotate-flair"
   // ── Kalakar-clone templates (Phase B) ────────────────────────
   | "hormozi"
-  | "mr-beast";
+  | "mr-beast"
+  | "bubble-style";
 
 export type RGB = [number, number, number];
 
@@ -106,6 +107,13 @@ export interface CaptionStyle {
    * dim of `baseColor`).
    */
   perWordChip?: { paddingX: number; paddingY: number; radius: number };
+  /**
+   * When true (used with `perWordChip`), ONLY the active word gets the
+   * coloured chip background — inactive words render as plain text in
+   * `baseColor`. Drives the "Bubble Style" Kalakar look: clean white
+   * line of words with a single green pill around the spoken word.
+   */
+  perWordChipActiveOnly?: boolean;
   /**
    * Per-word entrance animation. Drives the way each word "lands" on
    * screen at its own `word.start` time — independent of the phrase
@@ -481,6 +489,41 @@ export const CAPTION_STYLES: Record<CaptionStyleId, CaptionStyle> = {
     glowMode: "none",
     wordEntrance: "pop",
     wordEntranceDurationSec: 0.16,
+  },
+  "bubble-style": {
+    id: "bubble-style",
+    label: "Bubble Style",
+    isNew: true,
+    // Clean white serif/sans line of words with a SINGLE green pill
+    // around just the spoken word. The bubble travels left-to-right
+    // as playback advances — the rest of the phrase stays plain text.
+    // Modelled on Kalakar's "Bubble Style" template card preview:
+    // `The quick [brown] fox` with `brown` in a green pill.
+    baseColor: [1, 1, 1],
+    // Bright Kalakar-style green (≈ #22D15E) — same as the screenshot.
+    highlightColor: [0.13, 0.82, 0.37],
+    popInDurationSec: 0.14,
+    // Serif default like the Kalakar preview ("The quick brown fox")
+    // — distinguishes Bubble from the other heavy-sans templates.
+    fontFamily: "Georgia, 'Times New Roman', serif",
+    fontSize: 72,
+    strokeWidth: 0,
+    shadowOpacity: 0.35,
+    verticalPosition: 0.7,
+    textCase: "sentence",
+    bold: true,
+    letterSpacing: 0,
+    lineHeight: 1.15,
+    // The defining trait: chip on every word's slot, but the new
+    // perWordChipActiveOnly flag suppresses the inactive chips so we
+    // see exactly one green pill following the spoken word.
+    perWordChip: { paddingX: 18, paddingY: 8, radius: 10 },
+    perWordChipActiveOnly: true,
+    dropShadowColor: [0, 0, 0],
+    dropShadowBlur: 12,
+    dropShadowOffsetX: 0,
+    dropShadowOffsetY: 4,
+    glowMode: "none",
   },
 };
 

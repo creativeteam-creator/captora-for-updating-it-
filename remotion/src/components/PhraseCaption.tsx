@@ -350,7 +350,11 @@ export function PhraseCaption({ words, phraseStartSec, style, variant = "pop", p
         // word's chip uses `highlightColor`, inactive uses `boxInactiveColor`
         // (or a soft fallback). The text colour inside flips so it stays
         // readable on the chip background.
-        if (style.perWordChip) {
+        // Bubble Style trait: when `perWordChipActiveOnly` is set, skip
+        // the chip styling on inactive words so they render as plain
+        // text. The active word still gets the full pill — drives the
+        // "single floating green bubble on the spoken word" look.
+        if (style.perWordChip && !(style.perWordChipActiveOnly && !isActive)) {
           const chipBg = isActive ? highlightColor : inactiveColor;
           // Auto-pick a readable text colour: dark text on bright chip,
           // light text on dark chip.
