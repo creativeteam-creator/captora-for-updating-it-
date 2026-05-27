@@ -83,11 +83,33 @@ export interface CaptionStyle {
   glowBlur?: number;
   glowOnActive?: boolean;
   highlightGradient?: { from: RGB; to: RGB };
-  boxBackground?: { color: RGB; paddingX: number; paddingY: number; radius: number };
+  boxBackground?: {
+    color: RGB;
+    paddingX: number;
+    paddingY: number;
+    radius: number;
+    opacity?: number;
+    backdropBlur?: number;
+  };
   boxInactiveColor?: RGB;
   /** Wrap each WORD individually in a coloured pill (vs `boxBackground`
    *  which wraps the whole phrase). */
   perWordChip?: { paddingX: number; paddingY: number; radius: number };
+  /** When true (used with `perWordChip`), only the active word gets the
+   *  chip background; inactive words render as plain baseColor text. */
+  perWordChipActiveOnly?: boolean;
+  /** When true, only the active word is rendered (single-word focus
+   *  mode — Editing Skool style). */
+  activeWordOnly?: boolean;
+  /** Active-word size multiplier — drives the Splash template where
+   *  the spoken word renders at ~1.85× the neighbours. */
+  activeWordSizeMultiplier?: number;
+  /** Emphasis mode for the active word:
+   *  - "emphasize" (default): active brightens / scales up
+   *  - "spotlight": inactive words dim instead */
+  emphasisMode?: "emphasize" | "spotlight";
+  /** Dim ratio (0..1) for inactive words under emphasisMode === "spotlight". */
+  spotlightInactiveOpacity?: number;
   /** Cycle vertical position per phrase index — phrase 0 → cycle[0], etc.
    *  Falls back to `verticalPosition` when absent. */
   verticalPositionCycle?: number[];

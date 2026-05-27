@@ -346,12 +346,30 @@ export function PhraseCaption({ words, phraseStartSec, style, variant = "pop", p
         const perWordFontSize =
           combinedMul !== 1 ? style.fontSize * combinedMul : undefined;
 
+        // Spotlight emphasis mode: instead of brightening the active
+        // word, dim every OTHER word to a fraction of its opacity.
+        // The spoken word stays at full opacity so it visually leads
+        // without changing colour or size. Default dim ratio = 0.35
+        // (readable but clearly recessed). Disabled when emphasisMode
+        // !== "spotlight" so existing templates keep their behaviour.
+        const spotlightActive = style.emphasisMode === "spotlight";
+        const spotlightDim = spotlightActive
+          ? (typeof style.spotlightInactiveOpacity === "number"
+              ? Math.max(0, Math.min(1, style.spotlightInactiveOpacity))
+              : 0.35)
+          : 1;
+        const baseOpacity = isActive ? 1 : spotlightDim;
+
         const wordStyle: React.CSSProperties = {
           color: isActive ? highlightColor : inactiveColor,
           transform: composedTransform,
           transformOrigin: "center bottom",
           display: "inline-block",
-          opacity: wordEntrance.opacity,
+          // Compound the word-entrance opacity (0 → 1 over entrance
+          // frames) with the spotlight dim ratio so a phrase that's
+          // still animating in doesn't suddenly snap to full opacity
+          // when its entrance ends.
+          opacity: wordEntrance.opacity * baseOpacity,
           filter: wordEntrance.filter,
           // Per-word fontSize override (only set when a multiplier exists,
           // otherwise the inherited fontSize wins).

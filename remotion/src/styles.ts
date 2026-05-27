@@ -125,6 +125,23 @@ export interface CaptionStyle {
    */
   activeWordSizeMultiplier?: number;
   /**
+   * Emphasis mode for the active word, matching Kalakar's two-mode
+   * picker in the EMPHASIS section of the Text panel:
+   *   - "emphasize" (default) — active word brightens (highlightColor
+   *     + optional size/glow boost); inactive words stay full bright.
+   *   - "spotlight"           — active word stays normal; inactive
+   *     words DIM to a fraction of their normal opacity. Makes the
+   *     spoken word jump out without changing its size or colour.
+   */
+  emphasisMode?: "emphasize" | "spotlight";
+  /**
+   * Opacity multiplier applied to inactive words when emphasisMode
+   * is "spotlight". Default 0.35 — strong enough to read as dimmed
+   * without disappearing entirely. Range: 0 (fully hidden) to 1
+   * (no dimming). Ignored unless emphasisMode === "spotlight".
+   */
+  spotlightInactiveOpacity?: number;
+  /**
    * Inactive-word colour for the boxed look (typically a dim grey so the
    * active word reads as the focus). Falls back to baseColor when absent.
    */

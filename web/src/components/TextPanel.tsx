@@ -346,7 +346,8 @@ export function TextPanel({ base, overrides, onChange, onReset, userFonts, onUse
           </div>
         </ControlRow>
 
-        <ControlRow label="Fonts">
+        <Section title="Font" defaultOpen>
+        <ControlRow label="Family">
           <select
             value={matchFontStack(merged.fontFamily)}
             onChange={(e) => set("fontFamily", e.target.value)}
@@ -473,7 +474,7 @@ export function TextPanel({ base, overrides, onChange, onReset, userFonts, onUse
           )}
         </ControlRow>
 
-        <ControlRow label="Font Size">
+        <ControlRow label="Size">
           <SliderWithNumber
             value={merged.fontSize}
             min={32}
@@ -482,7 +483,9 @@ export function TextPanel({ base, overrides, onChange, onReset, userFonts, onUse
             onChange={(v) => set("fontSize", v)}
           />
         </ControlRow>
+        </Section>
 
+        <Section title="Position" defaultOpen>
         <ControlRow label="Position Y">
           <SliderWithNumber
             value={Math.round(merged.verticalPosition * 100)}
@@ -504,7 +507,9 @@ export function TextPanel({ base, overrides, onChange, onReset, userFonts, onUse
             onChange={(v) => set("horizontalPosition", v / 100)}
           />
         </ControlRow>
+        </Section>
 
+        <Section title="Style" defaultOpen>
         {/* ── Text Style — bold / italic / underline / case ──────────── */}
         <ControlRow label="Style">
           <div className="flex items-center gap-1">
@@ -569,7 +574,9 @@ export function TextPanel({ base, overrides, onChange, onReset, userFonts, onUse
             ))}
           </div>
         </ControlRow>
+        </Section>
 
+        <Section title="Spacing" defaultOpen={false}>
         {/* ── Letter spacing ─────────────────────────────────────────── */}
         <ControlRow label="Letter Spacing">
           <SliderWithNumber
@@ -593,7 +600,9 @@ export function TextPanel({ base, overrides, onChange, onReset, userFonts, onUse
             onChange={(v) => set("lineHeight", v / 100)}
           />
         </ControlRow>
+        </Section>
 
+        <Section title="Color" defaultOpen>
         <ControlRow label="Highlight Color">
           <ColorInput
             value={rgbToHex(merged.highlightColor)}
@@ -623,7 +632,70 @@ export function TextPanel({ base, overrides, onChange, onReset, userFonts, onUse
             onChange={(v) => set("strokeWidth", v)}
           />
         </ControlRow>
+        </Section>
 
+        <Section title="Emphasis" defaultOpen>
+        {/* Emphasize / Spotlight — matches Kalakar's EMPHASIS section
+            toggle. "Emphasize" (default) makes the active word brighter
+            and optionally bigger. "Spotlight" leaves the active word
+            untouched and DIMS every other word in the phrase so the
+            spoken one reads as the focal point without changing its
+            colour/size. */}
+        <ControlRow label="Mode">
+          <div className="inline-flex w-full rounded-md border border-[var(--border-subtle)] overflow-hidden">
+            {(["emphasize", "spotlight"] as const).map((m) => {
+              const current = merged.emphasisMode ?? "emphasize";
+              const sel = current === m;
+              return (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => set("emphasisMode", m)}
+                  className={`flex-1 px-3 py-1.5 text-[11px] capitalize ${
+                    sel
+                      ? "bg-[var(--accent)] text-black"
+                      : "text-[var(--text-muted)] hover:text-[var(--text)]"
+                  }`}
+                >
+                  {m}
+                </button>
+              );
+            })}
+          </div>
+        </ControlRow>
+
+        {/* Active-word size multiplier — applies to BOTH emphasis modes
+            but most visible in Emphasize. 1.0 = active word same size
+            as the rest; 2.0 = double size (the Splash template look). */}
+        <ControlRow label="Active Word Size">
+          <SliderWithNumber
+            value={Math.round((merged.activeWordSizeMultiplier ?? 1) * 100)}
+            min={50}
+            max={300}
+            step={5}
+            unit="%"
+            onChange={(v) => set("activeWordSizeMultiplier", v / 100)}
+          />
+        </ControlRow>
+
+        {/* Only meaningful when Spotlight is active — controls how dim
+            inactive words go. Hidden under Emphasize since it'd be a
+            no-op. */}
+        {(merged.emphasisMode ?? "emphasize") === "spotlight" && (
+          <ControlRow label="Spotlight Dim">
+            <SliderWithNumber
+              value={Math.round((merged.spotlightInactiveOpacity ?? 0.35) * 100)}
+              min={0}
+              max={100}
+              step={5}
+              unit="%"
+              onChange={(v) => set("spotlightInactiveOpacity", v / 100)}
+            />
+          </ControlRow>
+        )}
+        </Section>
+
+        <Section title="Effects" defaultOpen>
         <div className="flex items-center justify-between rounded-md border border-[var(--border)] bg-[var(--bg-elevated)] px-3 py-2.5">
           <span className="text-xs text-[var(--text-muted)]">Drop Shadow</span>
           <ToggleSwitch
@@ -731,7 +803,9 @@ export function TextPanel({ base, overrides, onChange, onReset, userFonts, onUse
           </ControlRow>
           </>
         )}
+        </Section>
 
+        <Section title="Animation" defaultOpen={false}>
         <ControlRow label="Pop-in Speed">
           <SliderWithNumber
             value={Math.round(merged.popInDurationSec * 1000)}
@@ -764,6 +838,7 @@ export function TextPanel({ base, overrides, onChange, onReset, userFonts, onUse
             </div>
           </div>
         </ControlRow>
+        </Section>
       </div>
     </div>
   );
@@ -774,6 +849,39 @@ function ControlRow({ label, children }: { label: string; children: React.ReactN
     <div className="space-y-1.5">
       <div className="text-[11px] uppercase tracking-wide text-[var(--text-muted)]">{label}</div>
       {children}
+    </div>
+  );
+}
+
+/**
+ * Collapsible section wrapper — gives the Text panel the visual
+ * grouping Kalakar's editor uses (POSITION / FONT / COLOR / EMPHASIS
+ * / SPACING / EFFECTS / ANIMATION). Each section header is uppercase
+ * tracked text with a ▶/▼ chevron; click to toggle. `defaultOpen`
+ * controls the initial state — most sections start expanded so power
+ * users see everything; rare sections (Animation) start collapsed.
+ */
+function Section({
+  title,
+  defaultOpen = true,
+  children,
+}: {
+  title: string;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="border-t border-[var(--border)] pt-3 first:border-t-0 first:pt-0">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center justify-between text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)] hover:text-[var(--text)]"
+      >
+        <span>{title}</span>
+        <span className="text-[8px]">{open ? "▼" : "▶"}</span>
+      </button>
+      {open && <div className="mt-3 space-y-3">{children}</div>}
     </div>
   );
 }
