@@ -26,8 +26,9 @@ export type CaptionStyleId =
   | "blur-reveal"
   | "drop-stack"
   | "rotate-flair"
-  // ── Kalakar-clone templates (Phase B, iter 1) ────────────────
-  | "hormozi";
+  // ── Kalakar-clone templates (Phase B) ────────────────────────
+  | "hormozi"
+  | "mr-beast";
 
 export type RGB = [number, number, number];
 
@@ -446,6 +447,38 @@ export const CAPTION_STYLES: Record<CaptionStyleId, CaptionStyle> = {
     dropShadowBlur: 18,
     dropShadowOffsetX: 0,
     dropShadowOffsetY: 6,
+    wordEntrance: "pop",
+    wordEntranceDurationSec: 0.16,
+  },
+  "mr-beast": {
+    id: "mr-beast",
+    label: "Mr Beast Style",
+    isNew: true,
+    // White caps with a THICK black stroke + sharp drop shadow — the
+    // signature MrBeast / classic YouTube Shorts caption that pops
+    // against any background. Active word flips to bright yellow
+    // without losing the outline. No glow (would soften the look) —
+    // the contrast is the whole point.
+    baseColor: [1, 1, 1],
+    highlightColor: [1.0, 0.95, 0.0], // bright yellow
+    popInDurationSec: 0.10,
+    fontFamily: "Anton, Bebas Neue, Impact, Montserrat, Inter, sans-serif",
+    fontSize: 104,
+    // 12px stroke is the signature — most templates use 4-8, MrBeast
+    // is intentionally heavier so the text reads as sticker-style.
+    strokeWidth: 12,
+    shadowOpacity: 0.95,
+    verticalPosition: 0.62,
+    textCase: "upper",
+    bold: true,
+    letterSpacing: 1,
+    lineHeight: 1.0,
+    // Sharp, offset drop shadow (no blur) reinforces the sticker feel.
+    dropShadowColor: [0, 0, 0],
+    dropShadowBlur: 0,
+    dropShadowOffsetX: 6,
+    dropShadowOffsetY: 8,
+    glowMode: "none",
     wordEntrance: "pop",
     wordEntranceDurationSec: 0.16,
   },
