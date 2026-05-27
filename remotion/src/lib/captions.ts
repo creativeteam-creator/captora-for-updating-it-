@@ -16,9 +16,12 @@ interface GroupOptions {
   pauseThresholdSec?: number;
   maxWordsPerLine?: number;
   maxDurationSec?: number;
+  /** Indexes after which the grouper MUST start a new line. Mirrors
+   *  the user-defined line breaks set in the captions editor. */
+  userBreaks?: Set<number>;
 }
 
-const DEFAULT_OPTS: Required<GroupOptions> = {
+const DEFAULT_OPTS: Required<Omit<GroupOptions, "userBreaks">> = {
   pauseThresholdSec: 0.4,
   maxWordsPerLine: 6,
   maxDurationSec: 3.0,
@@ -29,6 +32,7 @@ export function groupWordsIntoLines(
   opts: GroupOptions = {}
 ): CaptionLine[] {
   const { pauseThresholdSec, maxWordsPerLine, maxDurationSec } = { ...DEFAULT_OPTS, ...opts };
+  const userBreaks = opts.userBreaks;
   const lines: CaptionLine[] = [];
   let current: WhisperWord[] = [];
   let lineStartIdx = 0;
@@ -40,11 +44,15 @@ export function groupWordsIntoLines(
     const gap = prev ? w.start - prev.end : 0;
     const lineDuration = current.length ? w.end - current[0].start : 0;
 
+    const forcedBreak =
+      current.length > 0 && userBreaks ? userBreaks.has(i - 1) : false;
+
     const shouldBreak =
-      current.length > 0 &&
-      (gap > pauseThresholdSec ||
-        current.length >= maxWordsPerLine ||
-        lineDuration > maxDurationSec);
+      forcedBreak ||
+      (current.length > 0 &&
+        (gap > pauseThresholdSec ||
+          current.length >= maxWordsPerLine ||
+          lineDuration > maxDurationSec));
 
     if (shouldBreak) {
       lines.push({ startIndex: lineStartIdx, words: current });

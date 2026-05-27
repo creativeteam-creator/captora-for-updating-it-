@@ -20,9 +20,20 @@ interface GroupOptions {
   maxWordsPerLine?: number;
   /** Hard cap on line duration in seconds. */
   maxDurationSec?: number;
+  /**
+   * User-defined line breaks. Each entry is the index of a word AFTER
+   * which the grouper MUST start a new line, regardless of the natural
+   * gap / word-count / duration thresholds. Lets users override the
+   * auto-grouping from the captions list (click the ⏎ between two
+   * words to split a line).
+   *
+   * Example: userBreaks = new Set([4]) → words[0..4] form one line,
+   * words[5..] start the next line.
+   */
+  userBreaks?: Set<number>;
 }
 
-const DEFAULT_OPTS: Required<GroupOptions> = {
+const DEFAULT_OPTS: Required<Omit<GroupOptions, "userBreaks">> = {
   pauseThresholdSec: 0.4,
   maxWordsPerLine: 6,
   maxDurationSec: 3.0,
@@ -33,6 +44,7 @@ export function groupWordsIntoLines(
   opts: GroupOptions = {}
 ): CaptionLine[] {
   const { pauseThresholdSec, maxWordsPerLine, maxDurationSec } = { ...DEFAULT_OPTS, ...opts };
+  const userBreaks = opts.userBreaks;
   const lines: CaptionLine[] = [];
   let current: WhisperWord[] = [];
   let lineStartIdx = 0;
@@ -44,11 +56,19 @@ export function groupWordsIntoLines(
     const gap = prev ? w.start - prev.end : 0;
     const lineDuration = current.length ? w.end - current[0].start : 0;
 
+    // User-forced break: when the previous word's index is in
+    // userBreaks, start a new line BEFORE adding this word — i.e.
+    // the break is "after word N", so words[N+1...] go to the next
+    // line. This wins over the auto thresholds in either direction.
+    const forcedBreak =
+      current.length > 0 && userBreaks ? userBreaks.has(i - 1) : false;
+
     const shouldBreak =
-      current.length > 0 &&
-      (gap > pauseThresholdSec ||
-        current.length >= maxWordsPerLine ||
-        lineDuration > maxDurationSec);
+      forcedBreak ||
+      (current.length > 0 &&
+        (gap > pauseThresholdSec ||
+          current.length >= maxWordsPerLine ||
+          lineDuration > maxDurationSec));
 
     if (shouldBreak) {
       lines.push({ startIndex: lineStartIdx, words: current });
