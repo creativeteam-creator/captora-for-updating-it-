@@ -95,6 +95,11 @@ interface Props {
   /** Per-word fontSize multipliers (centisecond keys → multiplier). */
   wordSizes: Record<string, number>;
   onWordSizesChange: (next: Record<string, number>) => void;
+  /** User-forced line breaks — Set of word indexes after which the
+   *  captions grouper must start a new line. Edited inline from the
+   *  captions list (hover ⏎ between two words). */
+  userBreaks: Set<number>;
+  onUserBreaksChange: (next: Set<number>) => void;
 }
 
 export function EditorView({
@@ -108,6 +113,7 @@ export function EditorView({
   lineAnimations, onLineAnimationsChange,
   lineStyles, lineOverrides, selectedLineKey, onSelectLine, onPickTemplate, onClearLineStyle,
   wordSizes, onWordSizesChange,
+  userBreaks, onUserBreaksChange,
 }: Props) {
   // Single point that handles per-line variant edits. Setting a variant
   // adds/replaces the key; passing `null` removes it (resetting that
@@ -325,6 +331,8 @@ export function EditorView({
             onLineAnimationChange={handleLineAnimationChange}
             wordSizes={wordSizes}
             onWordSizesChange={onWordSizesChange}
+            userBreaks={userBreaks}
+            onUserBreaksChange={onUserBreaksChange}
           />
         )}
         {leftTab === "fonts" && (

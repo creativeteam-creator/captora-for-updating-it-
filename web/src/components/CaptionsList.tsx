@@ -92,13 +92,38 @@ interface Props {
    *  centiseconds. 1.0 = default, 1.5 = 150%. */
   wordSizes?: Record<string, number>;
   onWordSizesChange?: (next: Record<string, number>) => void;
+  /** User-forced line breaks: indexes in `words[]` after which the
+   *  grouper must start a new line. Toggled by the ⏎ button rendered
+   *  between adjacent words. */
+  userBreaks?: Set<number>;
+  onUserBreaksChange?: (next: Set<number>) => void;
 }
 
 export function CaptionsList({
   words, onWordsChange, lineAnimations, onLineAnimationChange,
   wordSizes, onWordSizesChange,
+  userBreaks, onUserBreaksChange,
 }: Props) {
-  const lines = useMemo(() => groupWordsIntoLines(words), [words]);
+  // Pass user-defined break points to the grouper so the displayed
+  // lines match what the renderer will produce (Remotion side also
+  // receives userBreaks via CaptionsCompositionProps).
+  const lines = useMemo(
+    () => groupWordsIntoLines(words, { userBreaks }),
+    [words, userBreaks]
+  );
+  // Toggle a break AFTER word index `idx`. Click ⏎ between word N
+  // and word N+1 — adds N to userBreaks (splits the line); click
+  // again removes it (merges back).
+  const toggleBreak = useCallback(
+    (idx: number) => {
+      if (!onUserBreaksChange) return;
+      const next = new Set(userBreaks ?? []);
+      if (next.has(idx)) next.delete(idx);
+      else next.add(idx);
+      onUserBreaksChange(next);
+    },
+    [userBreaks, onUserBreaksChange]
+  );
   // Absolute index of the word currently in edit mode, or null when none.
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [editingValue, setEditingValue] = useState("");
@@ -393,6 +418,10 @@ export function CaptionsList({
                         {w.word}
                       </span>
                     );
+                    // Is this the last word in this rendered line? If
+                    // not, we'll render a hover-revealed ⏎ button after
+                    // the word so the user can split the line here.
+                    const isLastInLine = j === line.words.length - 1;
                     return (
                       <span
                         key={`${absoluteIdx}-${w.start}`}
@@ -450,6 +479,22 @@ export function CaptionsList({
                               aria-label={`Delete word "${w.word}"`}
                             >
                               ×
+                            </button>
+                          )}
+                          {/* Line-break toggle — splits the line after
+                              this word, or merges back if a user break
+                              is already set here. Only shown when this
+                              isn't the last word in the rendered line
+                              AND a userBreaks setter is wired up. */}
+                          {!isLastInLine && onUserBreaksChange && (
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); toggleBreak(absoluteIdx); }}
+                              className="flex h-4 w-4 items-center justify-center rounded border border-[var(--border-subtle)] text-[10px] leading-none text-[var(--text-muted)] hover:border-[var(--accent)] hover:bg-[var(--accent-bg)] hover:text-[var(--accent)]"
+                              title="Break line here"
+                              aria-label={`Break line after "${w.word}"`}
+                            >
+                              ⏎
                             </button>
                           )}
                         </span>

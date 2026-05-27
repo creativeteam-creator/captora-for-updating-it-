@@ -99,6 +99,13 @@ export default function Home() {
    *  centiseconds. 1.0 = use line / global fontSize, 1.5 = 150%. Edited
    *  inline from CaptionsList, persisted with the project. */
   const [wordSizes, setWordSizes] = useState<Record<string, number>>({});
+  /** User-forced line breaks. Each entry is an INDEX in `editedWords`
+   *  after which a new caption line must start, overriding the auto
+   *  grouper. Wired into groupWordsIntoLines via the userBreaks option.
+   *  Edited inline from the captions list (hover ⏎ between two words).
+   *  Set is intentionally simple — supports undo via the editor's
+   *  snapshot system. */
+  const [userBreaks, setUserBreaks] = useState<Set<number>>(new Set());
   /** Currently-selected line in the timeline (centisecond key) — when
    *  set, picking a template applies to ONLY this line; when null,
    *  picking a template changes the project-wide `styleId`. */
@@ -732,6 +739,8 @@ export default function Home() {
           onClearLineStyle={onClearLineStyle}
           wordSizes={wordSizes}
           onWordSizesChange={setWordSizes}
+          userBreaks={userBreaks}
+          onUserBreaksChange={setUserBreaks}
         />
         <SettingsModal
           open={settingsOpen}
