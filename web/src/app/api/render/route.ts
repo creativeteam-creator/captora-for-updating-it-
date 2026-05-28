@@ -78,35 +78,6 @@ function sessionDir(): string {
 const REMOTION_ROOT = resolve(process.cwd(), "..", "remotion");
 const REMOTION_ENTRY = join(REMOTION_ROOT, "src", "index.ts");
 
-/**
- * Pick a free TCP port for Remotion's internal serve-static. We used to
- * hard-code 3301, but on systems where 3301 is already in use (other dev
- * tools, leaked from a prior crashed render, another Remotion instance)
- * Remotion's serve-static refuses to start and the render aborts with
- *   "You specified port 3301 to be used for the HTTP server,
- *    but it is not available."
- *
- * Scan the 3201-3300 range so the chosen port is always free for THIS
- * render. Falls back to letting Remotion auto-pick if every port in the
- * range is taken (very rare).
- */
-async function pickRenderPort(start = 3201): Promise<number | undefined> {
-  const net = await import("node:net");
-  for (let port = start; port < start + 100; port++) {
-    const free = await new Promise<boolean>((resolve) => {
-      const srv = net.createServer();
-      srv.once("error", () => resolve(false));
-      srv.once("listening", () => srv.close(() => resolve(true)));
-      srv.listen(port, "127.0.0.1");
-    });
-    if (free) return port;
-  }
-  // Every port in the range is taken — return undefined so the caller
-  // omits the `port` option and Remotion auto-picks instead.
-  console.warn("[/api/render] no free port in 3201..3300 — letting Remotion auto-pick");
-  return undefined;
-}
-
 let bundlePromise: Promise<string> | null = null;
 function getBundle(): Promise<string> {
   if (!bundlePromise) {
@@ -332,18 +303,20 @@ export async function POST(req: NextRequest) {
     );
 
     // ───── Render ─────
-    // Pick a fresh free port for THIS render. Previously hard-coded to
-    // 3301; on Mac systems where that port was occupied (other dev
-    // tools / leaked render) Remotion's serve-static refused to start.
-    // pickRenderPort() scans 3201-3300 for a free slot.
-    const renderPort = await pickRenderPort();
-    console.log(`[/api/render] using render port=${renderPort ?? "auto"}`);
+    // Let Remotion auto-pick a port for its internal serve-static. We
+    // used to pin one via pickRenderPort(), but on Windows the TCP
+    // TIME_WAIT state holds the port for up to 60s after
+    // selectComposition closes its server — then renderMedia tried to
+    // rebind the same port mid-render and failed with:
+    //   "You specified port X to be used for the HTTP server, but it
+    //    is not available."
+    // Remotion's own auto-picker scans free ports per-call so the two
+    // internal servers never collide.
     const tComp = Date.now();
     const composition = await selectComposition({
       serveUrl,
       id: compositionId,
       inputProps,
-      port: renderPort,
     });
     console.log(
       `[/api/render] composition selected in ${Date.now() - tComp}ms — ${composition.durationInFrames} frames @ ${composition.fps}fps`
@@ -375,7 +348,6 @@ export async function POST(req: NextRequest) {
       imageFormat: transparent ? "png" : "jpeg",
       outputLocation: outPath,
       inputProps,
-      port: renderPort,
     });
     console.log(
       `[/api/render] rendered in ${Date.now() - tRender}ms (codec=${codec}${transparent ? " 4444 alpha" : ""})`
