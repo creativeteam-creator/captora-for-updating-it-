@@ -24,15 +24,35 @@
 import { app, BrowserWindow, dialog } from "electron";
 import { autoUpdater } from "electron-updater";
 import { exec } from "child_process";
+import { appendFileSync } from "fs";
+import { join } from "path";
 
 let bound = false;
+
+/**
+ * Echo autoUpdate progress to BOTH the Electron main-process stdout AND
+ * the captora.log file in userData. The log file was previously only
+ * written by nextServer.ts (it pipes the Next.js subprocess stdout/err
+ * to disk), so anything we console.log from the main process never
+ * landed in the file. That's why old debugging sessions saw zero
+ * `[autoUpdate]` lines even when the updater was firing.
+ */
+function logLine(message: string): void {
+  console.log(message);
+  try {
+    const path = join(app.getPath("userData"), "captora.log");
+    appendFileSync(path, `[main] ${message}\n`);
+  } catch {
+    // userData may not be writable in weird sandbox configs — drop silently
+  }
+}
 
 export function setupAutoUpdate(getMainWindow: () => BrowserWindow | null): void {
   if (bound) return;
   bound = true;
 
   if (process.env.NODE_ENV === "development") {
-    console.log("[autoUpdate] disabled in development");
+    logLine("[autoUpdate] disabled in development");
     return;
   }
 
@@ -41,28 +61,46 @@ export function setupAutoUpdate(getMainWindow: () => BrowserWindow | null): void
   autoUpdater.autoDownload = true;       // background download
   autoUpdater.autoInstallOnAppQuit = true;
 
+  // Pipe electron-updater's own internal log through our log file too —
+  // surfaces network errors, manifest parse failures, GitHub rate limits,
+  // and other rare failure modes that don't fire as events.
+  type ElectronUpdaterLogger = {
+    transports?: { file?: { level?: string | false } };
+    info: (m: string) => void;
+    warn: (m: string) => void;
+    error: (m: string) => void;
+  };
+  const updaterLogger: ElectronUpdaterLogger = {
+    info: (m) => logLine(`[autoUpdate:info] ${m}`),
+    warn: (m) => logLine(`[autoUpdate:warn] ${m}`),
+    error: (m) => logLine(`[autoUpdate:error] ${m}`),
+  };
+  (autoUpdater as unknown as { logger: ElectronUpdaterLogger }).logger = updaterLogger;
+
+  logLine(`[autoUpdate] setup — currentVersion=${app.getVersion()} feedURL=github`);
+
   autoUpdater.on("checking-for-update", () => {
-    console.log("[autoUpdate] checking…");
+    logLine("[autoUpdate] checking…");
   });
 
   autoUpdater.on("update-available", (info) => {
-    console.log(`[autoUpdate] update available: v${info.version}`);
+    logLine(`[autoUpdate] update available: v${info.version}`);
   });
 
   autoUpdater.on("update-not-available", () => {
-    console.log("[autoUpdate] up to date");
+    logLine("[autoUpdate] up to date");
   });
 
   autoUpdater.on("error", (err) => {
-    console.warn("[autoUpdate] error:", err.message);
+    logLine(`[autoUpdate] error: ${err.message}`);
   });
 
   autoUpdater.on("download-progress", (p) => {
-    console.log(`[autoUpdate] downloading: ${p.percent.toFixed(1)}%`);
+    logLine(`[autoUpdate] downloading: ${p.percent.toFixed(1)}%`);
   });
 
   autoUpdater.on("update-downloaded", async (info) => {
-    console.log(`[autoUpdate] downloaded v${info.version}`);
+    logLine(`[autoUpdate] downloaded v${info.version}`);
 
     // Mac-specific: strip quarantine on the new app bundle so the
     // first launch after restart doesn't trigger Gatekeeper. Only
@@ -104,14 +142,14 @@ export function setupAutoUpdate(getMainWindow: () => BrowserWindow | null): void
   // Stagger the first check so the app finishes booting first.
   setTimeout(() => {
     autoUpdater.checkForUpdatesAndNotify().catch((err) => {
-      console.warn("[autoUpdate] check failed:", err.message);
+      logLine(`[autoUpdate] check failed: ${err.message}`);
     });
   }, 3_000);
 
   // Re-check every 4 hours while the app stays open
   setInterval(() => {
     autoUpdater.checkForUpdates().catch((err) => {
-      console.warn("[autoUpdate] periodic check failed:", err.message);
+      logLine(`[autoUpdate] periodic check failed: ${err.message}`);
     });
   }, 4 * 60 * 60 * 1000);
 }
