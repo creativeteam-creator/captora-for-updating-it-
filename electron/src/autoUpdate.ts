@@ -61,6 +61,28 @@ export function setupAutoUpdate(getMainWindow: () => BrowserWindow | null): void
   autoUpdater.autoDownload = true;       // background download
   autoUpdater.autoInstallOnAppQuit = true;
 
+  // Skip Windows code-signing verification. We ship ad-hoc-signed builds
+  // (no $300/year EV cert), so the new installer's Authenticode signature
+  // is null and electron-updater's default verifier refuses to install
+  // it ("New version X.Y.Z is not signed by the application owner").
+  // The download itself is fetched over HTTPS straight from our own
+  // GitHub release — that's the trust anchor here, not a cert chain.
+  // Also enable disableWebInstaller per the upstream warning so this
+  // path keeps working when electron-updater changes the default in a
+  // future release.
+  type NsisUpdaterOverrides = {
+    disableWebInstaller?: boolean;
+    verifyUpdateCodeSignature?: (
+      publisherNames: string[],
+      unescapedTempUpdateFile: string
+    ) => Promise<string | null>;
+  };
+  const win32Updater = autoUpdater as unknown as NsisUpdaterOverrides;
+  if (process.platform === "win32") {
+    win32Updater.verifyUpdateCodeSignature = async () => null;
+    win32Updater.disableWebInstaller = true;
+  }
+
   // Pipe electron-updater's own internal log through our log file too —
   // surfaces network errors, manifest parse failures, GitHub rate limits,
   // and other rare failure modes that don't fire as events.
