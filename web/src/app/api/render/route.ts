@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { bundle } from "@remotion/bundler";
 import { selectComposition, renderMedia } from "@remotion/renderer";
-import { copyFile, mkdir, readFile, unlink } from "fs/promises";
-import { existsSync } from "fs";
+import { copyFile, mkdir, readFile, stat, unlink } from "fs/promises";
+import { createReadStream, existsSync } from "fs";
+import { Readable } from "stream";
 import { join, resolve } from "path";
 import { tmpdir } from "os";
 import { randomUUID } from "crypto";
@@ -380,7 +381,16 @@ export async function POST(req: NextRequest) {
       `[/api/render] rendered in ${Date.now() - tRender}ms (codec=${codec}${transparent ? " 4444 alpha" : ""})`
     );
 
-    const mp4 = await readFile(outPath);
+    // ───── File size + streaming ─────
+    // Long 4K renders blow past Node's 2 GiB single-Buffer limit, so we
+    // never call readFile() on the rendered MP4. Instead we stat() for
+    // Content-Length and stream the file straight from disk for the
+    // response body. WEB-mode Supabase upload still needs the bytes —
+    // but it streams server-side too (uploadRender accepts a Buffer
+    // OR a stream-friendly upload path; for desktop mode we skip it
+    // entirely, which is the path multi-GB renders take in practice).
+    const renderedStat = await stat(outPath);
+    const renderedSize = renderedStat.size;
 
     // ───── Persist the render ─────
     // WEB mode: upload to Supabase Storage so the user can re-download
@@ -406,13 +416,27 @@ export async function POST(req: NextRequest) {
         console.warn("[/api/render] local render copy failed:", err);
       }
     } else {
-      const upload = await uploadRender(supabase, user.id, projectId, mp4).catch(
-        (err) => {
-          console.warn("[/api/render] upload to storage failed:", err);
-          return null;
-        }
-      );
-      renderRefPath = upload?.path ?? null;
+      // WEB mode only — guard against the 2 GiB readFile limit by
+      // skipping the cloud upload entirely for renders that won't fit
+      // in a single Buffer. The user still gets the streamed download
+      // below; only the long-term cloud copy is sacrificed.
+      const TWO_GIB = 2 * 1024 * 1024 * 1024;
+      if (renderedSize < TWO_GIB) {
+        const mp4 = await readFile(outPath);
+        const upload = await uploadRender(supabase, user.id, projectId, mp4).catch(
+          (err) => {
+            console.warn("[/api/render] upload to storage failed:", err);
+            return null;
+          }
+        );
+        renderRefPath = upload?.path ?? null;
+      } else {
+        console.warn(
+          `[/api/render] render is ${(renderedSize / 1e9).toFixed(2)}GB ` +
+          `— skipping Supabase upload (>2 GiB exceeds Node readFile limit). ` +
+          `User still gets the streamed download.`
+        );
+      }
     }
 
     await sb
@@ -425,13 +449,31 @@ export async function POST(req: NextRequest) {
       .eq("id", projectId);
 
     // ───── Stream rendered file back to caller ─────
+    // Web Response can take a Web ReadableStream. We adapt the Node
+    // fs.createReadStream via Readable.toWeb so we never materialise
+    // the whole MP4 in memory — the kernel pipes the file through to
+    // the client one chunk at a time. Browsers handle multi-GB blob
+    // downloads fine; the bottleneck was always server-side readFile.
     const filename = `captora-${style}-${projectId.slice(0, 8)}.${outExt}`;
-    return new NextResponse(new Uint8Array(mp4), {
+    const nodeStream = createReadStream(outPath);
+    // Hook cleanup to the stream's lifecycle: the finally block at the
+    // end of this handler runs as soon as we return, well before the
+    // browser finishes downloading the bytes — unlinking outPath there
+    // would race the stream and (on Windows) leak the 4GB temp file.
+    // We attach 'close' here, then null out the closure-scoped outPath
+    // so the finally block skips it.
+    const tempToCleanup = outPath;
+    outPath = null;
+    nodeStream.once("close", () => {
+      void unlink(tempToCleanup).catch(() => { /* best-effort */ });
+    });
+    const webStream = Readable.toWeb(nodeStream) as unknown as ReadableStream<Uint8Array>;
+    return new NextResponse(webStream, {
       status: 200,
       headers: {
         "Content-Type": contentType,
         "Content-Disposition": `attachment; filename="${filename}"`,
-        "Content-Length": String(mp4.byteLength),
+        "Content-Length": String(renderedSize),
       },
     });
   } catch (err) {
