@@ -40,6 +40,23 @@ const COMPOSITION_BY_STYLE: Record<CaptionStyleId, string> = {
   "blur-reveal":    "BoldViral",
   "drop-stack":     "BoldViral",
   "rotate-flair":   "BoldViral",
+  // ── Kalakar-clone templates (Phase B) — all route to BoldViral
+  // composition. The actual visual differences live in CAPTION_STYLES
+  // fields (color, font, glow, perWordChip, etc.); the composition
+  // wrapper just sets the canvas + audio routing, which is identical.
+  "hormozi":         "BoldViral",
+  "mr-beast":        "BoldViral",
+  "bubble-style":    "BoldViral",
+  "editing-skool":   "BoldViral",
+  "liquid-glass":    "BoldViral",
+  "pixelated-word":  "BoldViral",
+  "ziada":           "BoldViral",
+  "top-up":          "BoldViral",
+  "splash":          "BoldViral",
+  "highlight-word":  "BoldViral",
+  "kalakar":         "BoldViral",
+  "kalakar-shadow":  "BoldViral",
+  "named-style":     "BoldViral",
 };
 
 const AUDIO_EXTS = new Set([".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac", ".opus", ".wma"]);
