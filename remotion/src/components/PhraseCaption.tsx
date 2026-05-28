@@ -252,6 +252,14 @@ export function PhraseCaption({ words, phraseStartSec, style, variant = "pop", p
         fontStyle,
         textDecoration,
         WebkitTextStroke: baseStroke,
+        // CRITICAL: without paint-order: stroke, browsers draw the
+        // stroke ON TOP of the fill — for thick strokes (Mr Beast
+        // 12px, Hormozi 6px) the inner half of the stroke clips
+        // INTO the glyph and shows as a weird double / "embossed"
+        // line through every letter. paint-order=stroke fill puts
+        // the outline BEHIND the fill so only the outer half is
+        // visible, which is the proper sticker-text look.
+        paintOrder: "stroke fill",
         textShadow: phraseTextShadow,
         letterSpacing,
         textTransform,

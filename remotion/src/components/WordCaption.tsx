@@ -122,6 +122,7 @@ export function WordCaption({ word, isActive, style }: Props) {
         textDecoration,
         color,
         WebkitTextStroke: stroke,
+        paintOrder: "stroke fill",
         textShadow: composedTextShadow,
         whiteSpace: "nowrap",
         letterSpacing,

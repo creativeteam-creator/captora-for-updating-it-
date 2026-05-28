@@ -78,6 +78,12 @@ export function TextPanel({ base, overrides, onChange, onReset, userFonts, onUse
 
   // ── My Presets — locally-saved snapshots of CaptionStyleOverrides ───────
   const [presets, setPresets] = useState<TextPreset[]>([]);
+  // `savingPreset` toggles an inline name input. We don't use window.prompt()
+  // here because Electron's BrowserWindow doesn't implement it — the call
+  // returns null silently, so the previous prompt-driven save flow was a
+  // dead-end in the packaged app.
+  const [savingPreset, setSavingPreset] = useState(false);
+  const [presetName, setPresetName] = useState("");
   useEffect(() => {
     setPresets(listTextPresets());
   }, []);
@@ -115,10 +121,29 @@ export function TextPanel({ base, overrides, onChange, onReset, userFonts, onUse
   }, []);
 
   const handleSavePreset = () => {
-    const name = window.prompt("Preset name (will overwrite if it exists):");
-    if (!name || !name.trim()) return;
-    saveTextPreset(name.trim(), overrides);
+    // Toggle the inline name input. The old prompt-based flow was silently
+    // broken in Electron (window.prompt is unimplemented and returns null),
+    // so users tapped "Save" and nothing happened. Now we reveal an inline
+    // text input + Save button beneath the row.
+    setPresetName("");
+    setSavingPreset(true);
+  };
+
+  const commitSavePreset = () => {
+    const trimmed = presetName.trim();
+    if (!trimmed) {
+      setSavingPreset(false);
+      return;
+    }
+    saveTextPreset(trimmed, overrides);
     setPresets(listTextPresets());
+    setSavingPreset(false);
+    setPresetName("");
+  };
+
+  const cancelSavePreset = () => {
+    setSavingPreset(false);
+    setPresetName("");
   };
 
   const handleApplyPreset = (preset: TextPreset) => {
@@ -311,6 +336,38 @@ export function TextPanel({ base, overrides, onChange, onReset, userFonts, onUse
                 + Save
               </button>
             </div>
+            {savingPreset && (
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="text"
+                  autoFocus
+                  value={presetName}
+                  onChange={(e) => setPresetName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") commitSavePreset();
+                    else if (e.key === "Escape") cancelSavePreset();
+                  }}
+                  placeholder="Preset name (overwrites if it exists)"
+                  className="h-8 flex-1 rounded-md border border-[var(--border)] bg-[var(--bg-elevated)] px-2 text-xs text-[var(--text)] focus:border-[var(--accent)] focus:outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={commitSavePreset}
+                  className="rounded-md border border-[var(--accent)] bg-[var(--accent)] px-2.5 py-1 text-[11px] uppercase tracking-wide text-black hover:opacity-90"
+                  title="Save preset"
+                >
+                  Save
+                </button>
+                <button
+                  type="button"
+                  onClick={cancelSavePreset}
+                  className="rounded-md border border-[var(--border)] bg-[var(--bg-elevated)] px-2.5 py-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)] hover:border-[var(--border)] hover:text-[var(--text)]"
+                  title="Cancel"
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
             {presets.length > 0 && (
               <div className="flex flex-wrap gap-1">
                 {presets.map((p) => (
