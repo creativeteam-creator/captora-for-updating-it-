@@ -21,11 +21,14 @@
  * updates against an installed binary that doesn't exist.
  */
 
-import { app, BrowserWindow, dialog } from "electron";
+import { app, BrowserWindow, dialog, shell } from "electron";
 import { autoUpdater } from "electron-updater";
 import { exec } from "child_process";
 import { appendFileSync } from "fs";
 import { join } from "path";
+
+const GITHUB_RELEASE_BASE =
+  "https://github.com/creativeteam-creator/captora-for-updating-it-/releases/download";
 
 let bound = false;
 
@@ -60,6 +63,26 @@ export function setupAutoUpdate(getMainWindow: () => BrowserWindow | null): void
   // the packaged app's app-update.yml
   autoUpdater.autoDownload = true;       // background download
   autoUpdater.autoInstallOnAppQuit = true;
+
+  // ── Mac-specific: degrade to popup-and-download ───────────────────────
+  // Squirrel.Mac (electron-updater's Mac install backend) verifies the
+  // downloaded .app's code signature against the running app's signature
+  // before swap. Our ad-hoc-signed builds use a fresh random certificate
+  // per build (no $99/year Apple Developer cert), so the swap is rejected:
+  //   "Code signature at URL ... did not pass validation: code has no
+  //    resources but signature indicates they must be present"
+  // The download succeeds but the install silently fails — user clicks
+  // "Restart" and ends up on the same old version.
+  //
+  // Workaround: skip Squirrel.Mac entirely. When an update is available
+  // on Mac, show a popup that opens the GitHub release .dmg URL in the
+  // user's browser. They drag-drop install. Less seamless than Windows
+  // but 100% reliable until we ship a properly-signed-and-notarized
+  // build.
+  if (process.platform === "darwin") {
+    autoUpdater.autoDownload = false;       // download wastes bandwidth if install will fail
+    autoUpdater.autoInstallOnAppQuit = false;
+  }
 
   // Skip Windows code-signing verification. We ship ad-hoc-signed builds
   // (no $300/year EV cert), so the new installer's Authenticode signature
@@ -105,8 +128,35 @@ export function setupAutoUpdate(getMainWindow: () => BrowserWindow | null): void
     logLine("[autoUpdate] checking…");
   });
 
-  autoUpdater.on("update-available", (info) => {
+  autoUpdater.on("update-available", async (info) => {
     logLine(`[autoUpdate] update available: v${info.version}`);
+
+    // Mac: show a popup that opens the .dmg URL in the user's browser
+    // instead of trying to install via Squirrel.Mac (which fails on our
+    // ad-hoc signatures — see the autoDownload=false block above).
+    if (process.platform === "darwin") {
+      const win = getMainWindow();
+      if (!win) return;
+      const result = await dialog.showMessageBox(win, {
+        type: "info",
+        buttons: ["Download", "Later"],
+        defaultId: 0,
+        title: "Captora update available",
+        message: `Captora ${info.version} is available.`,
+        detail:
+          "Click Download to open the .dmg in your browser. Mount it, drag the new Captora into Applications, and replace the existing copy. Your work is saved.",
+      });
+      if (result.response !== 0) return;
+      // Pick the right .dmg for this user's CPU. Apple Silicon Macs
+      // report process.arch === "arm64"; Intel report "x64".
+      const dmgName =
+        process.arch === "arm64"
+          ? `Captora-${info.version}-arm64.dmg`
+          : `Captora-${info.version}.dmg`;
+      const url = `${GITHUB_RELEASE_BASE}/v${info.version}/${dmgName}`;
+      logLine(`[autoUpdate] opening download URL: ${url}`);
+      void shell.openExternal(url);
+    }
   });
 
   autoUpdater.on("update-not-available", () => {
