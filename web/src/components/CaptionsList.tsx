@@ -15,6 +15,7 @@
  */
 
 import { useMemo, useRef, useState, useEffect, useCallback } from "react";
+import type { PlayerRef } from "@remotion/player";
 import { groupWordsIntoLines, pickKeywordIndex } from "@/lib/captions";
 import type { WhisperWord } from "@/lib/whisper";
 import { ENTRANCE_VARIANT_CYCLE, type EntranceVariant } from "@captora/remotion";
@@ -97,12 +98,19 @@ interface Props {
    *  between adjacent words. */
   userBreaks?: Set<number>;
   onUserBreaksChange?: (next: Set<number>) => void;
+  /** Live playhead sync: when wired, the captions list auto-scrolls
+   *  to the word currently under the playhead and highlights it. Saves
+   *  the user from manually searching for the line that's playing —
+   *  the issue Mac users were reporting on long videos. */
+  playerRef?: React.RefObject<PlayerRef | null>;
+  fps?: number;
 }
 
 export function CaptionsList({
   words, onWordsChange, lineAnimations, onLineAnimationChange,
   wordSizes, onWordSizesChange,
   userBreaks, onUserBreaksChange,
+  playerRef, fps = 30,
 }: Props) {
   // Pass user-defined break points to the grouper so the displayed
   // lines match what the renderer will produce (Remotion side also
@@ -128,6 +136,48 @@ export function CaptionsList({
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [editingValue, setEditingValue] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // ── Playhead sync (issue #4) ──────────────────────────────────────────
+  // Subscribe to the Player's frameupdate so we know which word is "live"
+  // right now, then scroll that line into view. Without this, on long
+  // videos the user has to scroll the captions panel by hand to find the
+  // line being spoken — every Mac user reported this as friction.
+  const [activeWordIndex, setActiveWordIndex] = useState<number | null>(null);
+  const activeLineRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const player = playerRef?.current;
+    if (!player) return;
+    const handleFrame = (e: { detail: { frame: number } }) => {
+      const sec = e.detail.frame / fps;
+      // Binary search would be marginally faster but linear is fine even
+      // for 4000-word transcripts — the loop body is a single compare.
+      let idx: number | null = null;
+      for (let i = 0; i < words.length; i++) {
+        if (sec >= words[i].start && sec < words[i].end) { idx = i; break; }
+        if (sec < words[i].start) break;
+      }
+      setActiveWordIndex(idx);
+    };
+    player.addEventListener("frameupdate", handleFrame);
+    return () => player.removeEventListener("frameupdate", handleFrame);
+  }, [playerRef, fps, words]);
+  // Auto-scroll: when the active line changes, bring it into view.
+  // `block: "nearest"` only scrolls when the line is off-screen — won't
+  // fight the user if they manually scroll away to inspect a different
+  // line. We also debounce by gating on "active line moved" — without
+  // that, every frame would trigger a layout calc.
+  const [activeLineKey, setActiveLineKey] = useState<string | null>(null);
+  useEffect(() => {
+    if (activeWordIndex === null) { setActiveLineKey(null); return; }
+    const w = words[activeWordIndex];
+    if (!w) return;
+    setActiveLineKey(lineKey(w.start));
+  }, [activeWordIndex, words]);
+  useEffect(() => {
+    if (activeLineRef.current) {
+      activeLineRef.current.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+  }, [activeLineKey]);
   // Which line currently has its animation popover open (null = none).
   const [animPopoverLineKey, setAnimPopoverLineKey] = useState<string | null>(null);
 
@@ -231,6 +281,36 @@ export function CaptionsList({
   // Remove every word that belongs to a line — used by the per-line
   // trash button. `startIndex` and `count` come straight from the
   // CaptionLine the user clicked.
+  // Insert a fresh word AFTER absoluteIdx (or at index 0 when -1).
+  // The new word takes up the gap between its neighbours, clamped to
+  // 50ms minimum so it's always at least visible on the timeline.
+  // Issue #3 — Mac users had no way to add a missed word without
+  // jumping to the timeline strip; this puts the affordance right in
+  // the captions list where they're already editing.
+  const insertWord = useCallback(
+    (afterIdx: number) => {
+      if (!onWordsChange) return;
+      const prev = words[afterIdx];
+      const next = words[afterIdx + 1];
+      const start = prev ? prev.end : 0;
+      const end = next ? next.start : start + 0.4;
+      // Squeeze in if neighbours are touching — give 100ms either side.
+      const span = Math.max(0.05, end - start);
+      const inserted: WhisperWord = {
+        word: "new",
+        start: start + span * 0.25,
+        end: start + span * 0.75,
+      };
+      const updated = [...words];
+      updated.splice(afterIdx + 1, 0, inserted);
+      onWordsChange(updated);
+      // Drop straight into edit mode so the user just types the word.
+      setEditingIndex(afterIdx + 1);
+      setEditingValue("new");
+    },
+    [words, onWordsChange]
+  );
+
   const deleteLine = useCallback(
     (startIndex: number, count: number) => {
       if (!onWordsChange) return;
@@ -266,10 +346,16 @@ export function CaptionsList({
             const resolved = resolveOverrideKey(lineFirstStart, lineAnimations);
             const currentVariant = resolved?.variant;
             const isPopoverOpen = animPopoverLineKey === lKey;
+            const isActiveLine = activeLineKey === lKey;
             return (
               <div
                 key={`${line.startIndex}-${lineFirstStart}`}
-                className="group relative flex items-start gap-2 rounded-md px-3 py-2 hover:bg-[var(--bg-hover)]"
+                ref={isActiveLine ? activeLineRef : null}
+                className={`group relative flex items-start gap-2 rounded-md px-3 py-2 transition-colors ${
+                  isActiveLine
+                    ? "bg-[var(--accent-bg)] ring-1 ring-[var(--accent)]/40"
+                    : "hover:bg-[var(--bg-hover)]"
+                }`}
               >
                 <span className="mt-0.5 w-5 shrink-0 text-xs font-medium text-[var(--text-muted)]">
                   {i + 1}
@@ -403,7 +489,20 @@ export function CaptionsList({
                       }
                       onWordSizesChange(updated);
                     };
-                    const wordSpan = isKeyword ? (
+                    const isActiveWord = activeWordIndex === absoluteIdx;
+                    // Active-word pill: same accent color but full-fill +
+                    // white text so the user can tell at a glance which
+                    // word is being spoken right now. Wins over keyword
+                    // styling because "what's playing" is more relevant
+                    // than "what's the longest word in this line".
+                    const wordSpan = isActiveWord ? (
+                      <span
+                        onClick={() => beginEdit(absoluteIdx, w.word)}
+                        className={`${baseCls} bg-[var(--accent)] font-semibold text-white shadow-sm`}
+                      >
+                        {w.word}
+                      </span>
+                    ) : isKeyword ? (
                       <span
                         onClick={() => beginEdit(absoluteIdx, w.word)}
                         className={`${baseCls} border border-[var(--accent)] bg-[var(--accent-bg)] font-medium text-[var(--accent)] hover:brightness-125`}
@@ -479,6 +578,23 @@ export function CaptionsList({
                               aria-label={`Delete word "${w.word}"`}
                             >
                               ×
+                            </button>
+                          )}
+                          {/* Insert a new word after this one. The
+                              user types its text in the auto-opened
+                              editor; timing slots between this word's
+                              end and the next word's start. Address
+                              the long-standing "Whisper missed a word
+                              and I have no way to add it" complaint. */}
+                          {onWordsChange && (
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); insertWord(absoluteIdx); }}
+                              className="flex h-4 w-4 items-center justify-center rounded border border-[var(--border-subtle)] text-[10px] leading-none text-[var(--text-muted)] hover:border-[var(--accent)] hover:bg-[var(--accent-bg)] hover:text-[var(--accent)]"
+                              title="Insert a new word after this one"
+                              aria-label={`Insert new word after "${w.word}"`}
+                            >
+                              +
                             </button>
                           )}
                           {/* Line-break toggle — splits the line after

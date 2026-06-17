@@ -333,6 +333,7 @@ export function EditorView({
             onWordSizesChange={onWordSizesChange}
             userBreaks={userBreaks}
             onUserBreaksChange={onUserBreaksChange}
+            playerRef={playerRef}
           />
         )}
         {leftTab === "fonts" && (

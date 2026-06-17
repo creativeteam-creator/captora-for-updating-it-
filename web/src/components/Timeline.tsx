@@ -931,10 +931,10 @@ export function Timeline({
                             onPointerMove={continueDrag}
                             onPointerUp={endDrag}
                             onPointerCancel={endDrag}
-                            className={`absolute left-0 top-0 z-20 h-full w-1.5 cursor-col-resize rounded-l ${
+                            className={`absolute left-0 top-0 z-20 h-full w-3 cursor-col-resize rounded-l ${
                               isActive
                                 ? "bg-white/40"
-                                : "bg-[var(--accent)]/0 group-hover:bg-[var(--accent)]/60"
+                                : "bg-[var(--accent)]/0 group-hover:bg-[var(--accent)]/70"
                             }`}
                             aria-label={`Drag to retime word ${i + 1} start`}
                           />
@@ -961,10 +961,10 @@ export function Timeline({
                             onPointerMove={continueDrag}
                             onPointerUp={endDrag}
                             onPointerCancel={endDrag}
-                            className={`absolute right-0 top-0 z-20 h-full w-1.5 cursor-col-resize rounded-r ${
+                            className={`absolute right-0 top-0 z-20 h-full w-3 cursor-col-resize rounded-r ${
                               isActive
                                 ? "bg-white/40"
-                                : "bg-[var(--accent)]/0 group-hover:bg-[var(--accent)]/60"
+                                : "bg-[var(--accent)]/0 group-hover:bg-[var(--accent)]/70"
                             }`}
                             aria-label={`Drag to retime word ${i + 1} end`}
                           />
