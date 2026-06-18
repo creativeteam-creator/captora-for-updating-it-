@@ -122,10 +122,13 @@ export async function transcribeWithElevenLabs(opts: Options): Promise<WhisperRe
     const t0 = Date.now();
     console.log(`[elevenlabs] POST /speech-to-text lang=${opts.spokenLanguage} iso=${iso ?? "auto"}`);
 
-    // Long timeout — 30-min videos can take a couple of minutes server-side.
-    // Router catches the AbortError and falls back to the next provider.
+    // Long timeout — 40-min consultation videos can take 3-8 minutes
+    // server-side at peak ElevenLabs load. The old 5-min ceiling clipped
+    // anything past ~25 min audio, so the router silently dropped the
+    // user onto CPU Whisper (low quality). 15 min covers the upper end
+    // of clinic content without making genuine outages drag on too long.
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 300_000);
+    const timer = setTimeout(() => ctrl.abort(), 900_000);
 
     let resp: Response;
     try {
@@ -137,7 +140,7 @@ export async function transcribeWithElevenLabs(opts: Options): Promise<WhisperRe
       });
     } catch (err) {
       if ((err as Error).name === "AbortError") {
-        throw new Error("ElevenLabs request timed out after 5min");
+        throw new Error("ElevenLabs request timed out after 15min");
       }
       throw err;
     } finally {
@@ -189,13 +192,18 @@ async function parseAndReturn(
     const start = typeof w.start === "number" ? w.start : 0;
     let end = typeof w.end === "number" ? w.end : 0;
     // Drop hallucinated / junk entries:
-    //   - end <= start  (impossible duration)
-    //   - end - start < 30ms (no real spoken word is this short; these
-    //     are usually marker tokens emitted during background music or
-    //     coughs; they cluster at one timestamp and form a 70-word
-    //     "phrase" that fills the entire preview frame as a text wall)
+    //   - end <= start (impossible duration)
+    //   - end - start < 10ms (these are marker tokens emitted during
+    //     background music / coughs; they cluster at one timestamp and
+    //     form a 70-word "phrase" that fills the preview frame as a
+    //     text wall). Previously this threshold was 30ms, which also
+    //     killed legitimate fast-spoken Hindi/Hinglish connectors
+    //     ("k", "h", "m", "to") in rapid speech — a chunk of the
+    //     "words skip ho rahe hain" reports on long-form videos.
+    //     10ms is well below any real spoken duration but still nukes
+    //     the music-burst markers.
     if (end <= start) { dropped++; continue; }
-    if (end - start < 0.03) { dropped++; continue; }
+    if (end - start < 0.01) { dropped++; continue; }
     // Clamp pathologically long-duration "words". This is the fix for
     // the "ek single word for multiple lines worth of audio" bug —
     // without this a hallucinated 30-second word would occupy 30s of

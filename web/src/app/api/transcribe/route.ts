@@ -21,7 +21,13 @@ import { getUserApiKeys } from "@/lib/userApiKeys";
 import { withRequestContext } from "@/lib/requestContext";
 
 export const runtime = "nodejs";
-export const maxDuration = 300; // seconds — first call downloads the model
+// 30-min cap so long-form content (clinic consultations / training videos up
+// to 40 min) finishes the full pipeline — upload + ElevenLabs server-side
+// processing + Hinglish LLM polish + DB insert. The old 5-min cap chopped
+// off legitimate 20-40 min audio mid-process and silently dropped the user
+// onto local CPU Whisper, which is the "good for 2-min files, bad for
+// 20-min files" quality cliff the team was reporting.
+export const maxDuration = 1800;
 
 /**
  * Working directory for Whisper. Whisper / faster-whisper need a real
