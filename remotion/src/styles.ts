@@ -40,7 +40,8 @@ export type CaptionStyleId =
   | "kalakar"
   | "kalakar-shadow"
   | "named-style"
-  | "cluster-kinetic";
+  | "cluster-kinetic"
+  | "word-pile-stack";
 
 export type RGB = [number, number, number];
 
@@ -244,6 +245,18 @@ export interface CaptionStyle {
     maxRotationDeg?: number;
     /** Hero word color override. Defaults to `highlightColor`. */
     heroColor?: RGB;
+  };
+  /**
+   * Cumulative "pile-up" mode — from the 2.mp4 reference. Each spoken
+   * word lands HUGE at center; older words shrink and drift up-left,
+   * remaining visible so the pile grows across the phrase. Every third
+   * word takes the highlight color to break monotony. When present,
+   * PhraseCaption/ClusterCaption are bypassed for StackCaption.
+   */
+  stack?: {
+    /** True to enable. Field is an object for future tuning knobs
+     *  (max visible words, shrink factor, drift direction, etc.). */
+    enabled: true;
   };
 }
 
@@ -913,6 +926,29 @@ export const CAPTION_STYLES: Record<CaptionStyleId, CaptionStyle> = {
       maxRotationDeg: 8,
       // heroColor omitted → falls back to highlightColor (the green)
     },
+  },
+  "word-pile-stack": {
+    id: "word-pile-stack",
+    label: "Word Pile Stack",
+    baseColor: [1, 1, 1],
+    highlightColor: [0.16, 0.92, 0.42], // bright green — matches 2.mp4 reference
+    popInDurationSec: 0.12,
+    fontFamily: "Anton, Bebas Neue, Montserrat, Inter, sans-serif",
+    fontSize: 96,
+    strokeWidth: 0,
+    shadowOpacity: 0,
+    verticalPosition: 0.5,
+    isNew: true,
+    textCase: "lower",
+    bold: true,
+    letterSpacing: -2,
+    // Reuse cluster.scatterRadius + heroScale for the pile's focal-size
+    // and drift-radius tuning; StackCaption reads both from `cluster`.
+    cluster: {
+      heroScale: 2.4,
+      scatterRadius: 260,
+    },
+    stack: { enabled: true },
   },
 };
 

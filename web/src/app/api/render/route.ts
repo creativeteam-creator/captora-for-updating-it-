@@ -61,6 +61,8 @@ const COMPOSITION_BY_STYLE: Record<CaptionStyleId, string> = {
   // Cluster mode swaps in ClusterCaption inside the BoldViral shell;
   // the composition wrapper is identical, so the same host works.
   "cluster-kinetic": "BoldViral",
+  // Stack mode swaps in StackCaption inside the same BoldViral shell.
+  "word-pile-stack": "BoldViral",
 };
 
 const AUDIO_EXTS = new Set([".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac", ".opus", ".wma"]);

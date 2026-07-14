@@ -40,7 +40,8 @@ export type CaptionStyleId =
   | "kalakar"
   | "kalakar-shadow"
   | "named-style"
-  | "cluster-kinetic";
+  | "cluster-kinetic"
+  | "word-pile-stack";
 
 export type RGB = [number, number, number];
 
@@ -167,6 +168,15 @@ export interface CaptionStyle {
     scatterRadius?: number;
     maxRotationDeg?: number;
     heroColor?: RGB;
+  };
+  /**
+   * Cumulative "pile-up" mode. Each spoken word lands HUGE at center;
+   * older words shrink and drift up-left, remaining visible so the pile
+   * grows across the phrase. Every third word takes highlight color for
+   * the CapCut "green punctuation" feel.
+   */
+  stack?: {
+    enabled: true;
   };
 }
 
@@ -820,6 +830,28 @@ export const CAPTION_STYLES: Record<CaptionStyleId, CaptionStyle> = {
       scatterRadius: 240,
       maxRotationDeg: 8,
     },
+  },
+  "word-pile-stack": {
+    id: "word-pile-stack",
+    label: "Word Pile Stack",
+    description: "Cumulative pile · every spoken word stays · newest word largest",
+    isNew: true,
+    baseColor: [1, 1, 1],
+    highlightColor: [0.16, 0.92, 0.42],
+    popInDurationSec: 0.12,
+    fontFamily: "Anton, Bebas Neue, Montserrat, Inter, sans-serif",
+    fontSize: 96,
+    strokeWidth: 0,
+    shadowOpacity: 0,
+    verticalPosition: 0.5,
+    textCase: "lower",
+    bold: true,
+    letterSpacing: -2,
+    cluster: {
+      heroScale: 2.4,
+      scatterRadius: 260,
+    },
+    stack: { enabled: true },
   },
 };
 
