@@ -1,4 +1,3 @@
-import React from "react";
 import { interpolate, useCurrentFrame, spring, useVideoConfig } from "remotion";
 import { CaptionStyle, rgbToCss } from "../styles";
 import { WhisperWord } from "../types";
@@ -12,23 +11,26 @@ interface Props {
 }
 
 /**
- * Kinetic-typography cluster layout — CapCut / Instagram-Reels viral
- * caption style. One "hero" word (usually the longest content word)
- * renders HUGE at the phrase center; the surrounding words scatter
- * around it at pseudo-random offsets with slight rotation. Each word
- * pops in at its own `word.start` time, so the cluster builds up
- * one word at a time as the audio plays.
+ * Kinetic-typography cluster caption — CapCut / Instagram-Reels look
+ * from the "Video 2" reference. Hero word (longest content word) lands
+ * HUGE at the phrase center; non-hero words orbit ABOVE and to the
+ * sides of the hero in dedicated slots so they never overlap it.
  *
- * Uses a deterministic pseudo-random offset derived from the phrase
- * start time — same phrase always renders the same layout across
- * previews and renders (avoids the "layout changes every scrub"
- * problem you'd get with Math.random()).
+ * The first cut of this scattered words around center in a full 360°
+ * ring — with a 2.6× hero at the center, the smaller words inevitably
+ * collided with the hero glyphs. Fixed by:
+ *   1. Placing the hero at the FRAME center vertically (not phrase
+ *      center), so it dominates its own row.
+ *   2. Positioning non-hero words in a horizontal band above/below the
+ *      hero row — never on top of the hero itself. Distributed
+ *      evenly using golden-angle × width for reproducible spacing.
+ *   3. Enforcing a minimum vertical clearance of one hero-row height
+ *      between the hero and the smaller words.
+ *
+ * Words appear at their own `start` time via spring pop.
  */
 
-/**
- * Deterministic PRNG — mulberry32. Seeded with the phrase start time
- * so previews and renders match, and each phrase gets its own layout.
- */
+/** mulberry32 seeded PRNG. */
 function makeRng(seed: number): () => number {
   let s = Math.floor(seed * 1000) | 0;
   return () => {
@@ -40,15 +42,13 @@ function makeRng(seed: number): () => number {
   };
 }
 
-/** Pick the "hero" word — longest non-trivial word wins. */
 function pickHeroIndex(words: WhisperWord[]): number {
   if (words.length === 0) return 0;
   let bestIdx = 0;
   let bestLen = words[0].word.length;
   for (let i = 1; i < words.length; i++) {
-    const len = words[i].word.length;
-    if (len > bestLen) {
-      bestLen = len;
+    if (words[i].word.length > bestLen) {
+      bestLen = words[i].word.length;
       bestIdx = i;
     }
   }
@@ -63,25 +63,31 @@ export function ClusterCaption({
   wordSizes,
 }: Props) {
   const frame = useCurrentFrame();
-  const { fps, width } = useVideoConfig();
+  const { fps, width, height } = useVideoConfig();
+
   const phraseEndSec = words[words.length - 1].end;
   const phraseDurationSec = Math.max(0.1, phraseEndSec - phraseStartSec);
   const phraseDurationFrames = Math.max(1, Math.round(phraseDurationSec * fps));
 
-  const cluster = style.cluster ?? {};
-  const heroScale = cluster.heroScale ?? 2.5;
-  const scatterRadiusPx = cluster.scatterRadius ?? Math.min(width * 0.32, 300);
-  const maxRotationDeg = cluster.maxRotationDeg ?? 8;
-  const heroColor = cluster.heroColor ?? style.highlightColor;
-
+  const heroScale = style.cluster?.heroScale ?? 2.4;
+  const heroColor = style.cluster?.heroColor ?? style.highlightColor;
   const heroIdx = pickHeroIndex(words);
+
+  const baseFontSize = style.fontSize;
+  const heroFontSize = baseFontSize * heroScale;
+  // Non-hero words render at 60% of the base size — small enough not
+  // to compete with the hero but readable at 1080p.
+  const nonHeroFontSize = baseFontSize * 0.6;
+
+  // Vertical layout — hero row sits at 55% of canvas height (a bit
+  // below true middle so the pile has more room to breathe above the
+  // hero row). Non-hero words split into an "above" band and a
+  // "below" band to fill the frame symmetrically.
+  const heroY = height * 0.55;
+  const rowClearance = heroFontSize * 0.7; // never encroach on hero row
+
   const rng = makeRng(phraseStartSec + phraseIndex);
 
-  // Absolute time within this phrase, for driving per-word entrance.
-  const tPhraseSec = frame / fps;
-
-  // Phrase-level opacity for entrance / exit — snap in fast, hold, then
-  // fade out over the last 6 frames so cut between clusters feels tight.
   const phraseOpacity = (() => {
     if (frame < 4) return interpolate(frame, [0, 4], [0, 1]);
     const fadeStart = phraseDurationFrames - 6;
@@ -94,95 +100,129 @@ export function ClusterCaption({
     return 1;
   })();
 
+  const casing = (raw: string): string => {
+    if (style.textCase === "upper") return raw.toUpperCase();
+    if (style.textCase === "lower") return raw.toLowerCase();
+    return raw;
+  };
+
+  // Split non-hero words into ABOVE / BELOW the hero. Alternate
+  // assignment for even distribution.
+  const nonHero = words
+    .map((w, i) => ({ w, i }))
+    .filter(({ i }) => i !== heroIdx);
+  const aboveWords: { w: WhisperWord; i: number }[] = [];
+  const belowWords: { w: WhisperWord; i: number }[] = [];
+  nonHero.forEach((entry, k) => {
+    (k % 2 === 0 ? aboveWords : belowWords).push(entry);
+  });
+
+  // Layout one band as horizontally-packed words with per-word jitter
+  // for the mosaic feel. Returns absolute (x, y) per word.
+  const layoutBand = (
+    band: { w: WhisperWord; i: number }[],
+    bandY: number
+  ): Array<{ i: number; w: WhisperWord; cx: number; cy: number; rot: number }> => {
+    if (band.length === 0) return [];
+    const charWidthRatio = 0.5;
+    const gap = nonHeroFontSize * 0.35;
+    const widths = band.map(
+      ({ w }) => (casing(w.word).length + 0.5) * nonHeroFontSize * charWidthRatio
+    );
+    const totalWidth =
+      widths.reduce((s, w) => s + w, 0) + gap * (band.length - 1);
+    const maxWidth = width * 0.9;
+    const scale = totalWidth > maxWidth ? maxWidth / totalWidth : 1;
+    let cursor = width / 2 - (totalWidth * scale) / 2;
+    return band.map(({ w, i }, k) => {
+      const ww = widths[k] * scale;
+      const cx = cursor + ww / 2;
+      cursor += ww + gap * scale;
+      // Small vertical jitter per word (±14px) + slight rotation.
+      const jitterY = (rng() - 0.5) * 20;
+      const rot = (rng() - 0.5) * (style.cluster?.maxRotationDeg ?? 6);
+      return { i, w, cx, cy: bandY + jitterY, rot };
+    });
+  };
+
+  const abovePositions = layoutBand(
+    aboveWords,
+    heroY - rowClearance - nonHeroFontSize * 0.5
+  );
+  const belowPositions = layoutBand(
+    belowWords,
+    heroY + rowClearance + nonHeroFontSize * 0.5
+  );
+
+  const wordSlots = [
+    ...abovePositions,
+    ...belowPositions,
+    {
+      i: heroIdx,
+      w: words[heroIdx],
+      cx: width / 2,
+      cy: heroY,
+      rot: 0,
+    },
+  ];
+
   return (
     <div
       style={{
         position: "absolute",
         inset: 0,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
         opacity: phraseOpacity,
         fontFamily: style.fontFamily,
       }}
     >
-      {/* Anchor point — every word is absolutely positioned relative to
-          this centered wrapper, so scatter offsets are around the true
-          middle of the canvas regardless of phrase length. */}
-      <div style={{ position: "relative", width: 0, height: 0 }}>
-        {words.map((w, i) => {
-          const isHero = i === heroIdx;
-          const wordStartRel = Math.max(0, w.start - phraseStartSec);
-          const wordStartFrame = Math.round(wordStartRel * fps);
+      {wordSlots.map(({ i, w, cx, cy, rot }) => {
+        const isHero = i === heroIdx;
+        const wordStartRel = Math.max(0, w.start - phraseStartSec);
+        const wordStartFrame = Math.round(wordStartRel * fps);
+        const entrance = spring({
+          frame: frame - wordStartFrame,
+          fps,
+          config: { damping: 12, mass: 0.7, stiffness: 220 },
+          durationInFrames: 12,
+        });
 
-          // Per-word entrance: spring pop from 0 → 1 scale + opacity.
-          // Only fires once the word's start frame is reached.
-          const entered = frame >= wordStartFrame;
-          const entrance = entered
-            ? spring({
-                frame: frame - wordStartFrame,
-                fps,
-                config: { damping: 12, mass: 0.7, stiffness: 220 },
-                durationInFrames: 12,
-              })
-            : 0;
+        const wordKey = String((w.start * 100) | 0);
+        const userMul = wordSizes?.[wordKey] ?? 1;
+        const fontSize = (isHero ? heroFontSize : nonHeroFontSize) * userMul;
 
-          // Deterministic scatter — same phrase always lays out the same.
-          // Hero sits at the anchor; others fan out.
-          const angle = rng() * Math.PI * 2;
-          const distance = isHero ? 0 : scatterRadiusPx * (0.35 + rng() * 0.65);
-          const dx = Math.cos(angle) * distance;
-          const dy = Math.sin(angle) * distance * 0.55; // squash vertically
-          const rot = isHero ? 0 : (rng() * 2 - 1) * maxRotationDeg;
+        const text = casing(w.word);
 
-          // Size — hero gets heroScale multiplier; per-word wordSizes
-          // still layer on top if the user tuned individual words.
-          const wordKey = String((w.start * 100) | 0);
-          const userMul = wordSizes?.[wordKey] ?? 1;
-          const baseFontSize = style.fontSize;
-          const wordFontSize = isHero
-            ? baseFontSize * heroScale * userMul
-            : baseFontSize * 0.85 * userMul;
-
-          const wordText = (() => {
-            const raw = w.word;
-            if (style.textCase === "upper") return raw.toUpperCase();
-            if (style.textCase === "lower") return raw.toLowerCase();
-            return raw;
-          })();
-
-          return (
-            <div
-              key={`${i}-${w.start}`}
-              style={{
-                position: "absolute",
-                left: `${dx}px`,
-                top: `${dy}px`,
-                transform: `translate(-50%, -50%) rotate(${rot}deg) scale(${entrance})`,
-                opacity: entrance,
-                fontSize: `${wordFontSize}px`,
-                fontWeight: isHero ? 900 : 800,
-                color: rgbToCss(isHero ? heroColor : style.baseColor),
-                letterSpacing: style.letterSpacing
-                  ? `${style.letterSpacing}px`
+        return (
+          <div
+            key={`${i}-${w.start}`}
+            style={{
+              position: "absolute",
+              left: `${cx}px`,
+              top: `${cy}px`,
+              transform: `translate(-50%, -50%) rotate(${rot}deg) scale(${entrance})`,
+              opacity: entrance,
+              fontSize: `${fontSize}px`,
+              fontWeight: isHero ? 900 : 800,
+              color: rgbToCss(isHero ? heroColor : style.baseColor),
+              letterSpacing: style.letterSpacing
+                ? `${style.letterSpacing}px`
+                : undefined,
+              whiteSpace: "nowrap",
+              lineHeight: 0.95,
+              paintOrder: "stroke fill",
+              WebkitTextStroke: style.strokeWidth
+                ? `${style.strokeWidth}px black`
+                : undefined,
+              textShadow:
+                style.shadowOpacity && style.shadowOpacity > 0
+                  ? `0 4px 12px rgba(0,0,0,${style.shadowOpacity})`
                   : undefined,
-                whiteSpace: "nowrap",
-                lineHeight: 1,
-                WebkitTextStroke: style.strokeWidth
-                  ? `${style.strokeWidth}px black`
-                  : undefined,
-                paintOrder: "stroke fill",
-                textShadow:
-                  style.shadowOpacity && style.shadowOpacity > 0
-                    ? `0 4px 12px rgba(0,0,0,${style.shadowOpacity})`
-                    : undefined,
-              }}
-            >
-              {wordText}
-            </div>
-          );
-        })}
-      </div>
+            }}
+          >
+            {text}
+          </div>
+        );
+      })}
     </div>
   );
 }
