@@ -5,6 +5,7 @@ import { WhisperWord } from "../types";
 import { groupWordsIntoLines } from "../lib/captions";
 import { ENTRANCE_VARIANT_CYCLE, pickVariant, type EntranceVariant } from "../lib/entranceVariants";
 import { PhraseCaption } from "./PhraseCaption";
+import { ClusterCaption } from "./ClusterCaption";
 
 interface Props {
   words: WhisperWord[];
@@ -153,14 +154,24 @@ export function CaptionsTimeline({ words, style, lineAnimations, lineStyles, wor
             durationInFrames={durationFrames}
             name={line.words.map((w) => w.word).join(" ")}
           >
-            <PhraseCaption
-              words={line.words}
-              phraseStartSec={phraseStartSec}
-              style={lineStyle}
-              variant={variant}
-              phraseIndex={i}
-              wordSizes={wordSizes}
-            />
+            {lineStyle.cluster ? (
+              <ClusterCaption
+                words={line.words}
+                phraseStartSec={phraseStartSec}
+                style={lineStyle}
+                phraseIndex={i}
+                wordSizes={wordSizes}
+              />
+            ) : (
+              <PhraseCaption
+                words={line.words}
+                phraseStartSec={phraseStartSec}
+                style={lineStyle}
+                variant={variant}
+                phraseIndex={i}
+                wordSizes={wordSizes}
+              />
+            )}
           </Sequence>
         );
       })}

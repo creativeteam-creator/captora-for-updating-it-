@@ -39,7 +39,8 @@ export type CaptionStyleId =
   | "highlight-word"
   | "kalakar"
   | "kalakar-shadow"
-  | "named-style";
+  | "named-style"
+  | "cluster-kinetic";
 
 export type RGB = [number, number, number];
 
@@ -154,6 +155,19 @@ export interface CaptionStyle {
    * Set to 0 to disable. Exposed via the TextPanel "Sync" slider.
    */
   wordAnticipationSec?: number;
+  /**
+   * Kinetic-typography cluster mode — words scatter around the phrase
+   * center with one "hero" word (longest content word) rendered at
+   * `heroScale`. Drives the CapCut / Instagram-Reels viral caption
+   * look. When set, the renderer bypasses PhraseCaption's row layout
+   * and uses ClusterCaption instead. Absent by default.
+   */
+  cluster?: {
+    heroScale?: number;
+    scatterRadius?: number;
+    maxRotationDeg?: number;
+    heroColor?: RGB;
+  };
 }
 
 /** Mirror of `WordEntranceVariant` in remotion/src/lib/entranceVariants.ts. */
@@ -784,6 +798,28 @@ export const CAPTION_STYLES: Record<CaptionStyleId, CaptionStyle> = {
     dropShadowOffsetX: 0,
     dropShadowOffsetY: 3,
     glowMode: "none",
+  },
+  "cluster-kinetic": {
+    id: "cluster-kinetic",
+    label: "Cluster Kinetic",
+    description: "Kinetic mosaic · hero word centered · scattered surround",
+    isNew: true,
+    baseColor: [0.05, 0.05, 0.05],
+    highlightColor: [0.13, 0.85, 0.29],
+    popInDurationSec: 0.15,
+    fontFamily: "Anton, Bebas Neue, Montserrat, Inter, sans-serif",
+    fontSize: 96,
+    strokeWidth: 0,
+    shadowOpacity: 0,
+    verticalPosition: 0.5,
+    textCase: "lower",
+    bold: true,
+    letterSpacing: -2,
+    cluster: {
+      heroScale: 2.6,
+      scatterRadius: 240,
+      maxRotationDeg: 8,
+    },
   },
 };
 

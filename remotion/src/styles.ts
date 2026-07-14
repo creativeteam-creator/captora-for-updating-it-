@@ -39,7 +39,8 @@ export type CaptionStyleId =
   | "highlight-word"
   | "kalakar"
   | "kalakar-shadow"
-  | "named-style";
+  | "named-style"
+  | "cluster-kinetic";
 
 export type RGB = [number, number, number];
 
@@ -224,6 +225,26 @@ export interface CaptionStyle {
    * when absent.
    */
   verticalPositionCycle?: number[];
+  /**
+   * Kinetic-typography cluster mode — words scatter around the phrase
+   * center with one "hero" word (longest content word) rendered at
+   * `heroScale`. Drives the CapCut / Instagram-Reels viral caption
+   * style. When present, PhraseCaption is bypassed in favour of the
+   * dedicated ClusterCaption component so the row layout doesn't
+   * fight the scatter positions. Absent by default — leaves the row
+   * layout the other 30 templates use.
+   */
+  cluster?: {
+    /** Scale multiplier applied to the hero word. Default 2.5. */
+    heroScale?: number;
+    /** Max scatter distance from center in px. Default 30% of canvas
+     *  width, capped at 300px. */
+    scatterRadius?: number;
+    /** Max ±rotation applied to non-hero words in degrees. Default 8. */
+    maxRotationDeg?: number;
+    /** Hero word color override. Defaults to `highlightColor`. */
+    heroColor?: RGB;
+  };
 }
 
 export const CAPTION_STYLES: Record<CaptionStyleId, CaptionStyle> = {
@@ -870,6 +891,28 @@ export const CAPTION_STYLES: Record<CaptionStyleId, CaptionStyle> = {
     // sticker-label aesthetic better than a fade or slide.
     wordEntrance: "pop",
     wordEntranceDurationSec: 0.18,
+  },
+  "cluster-kinetic": {
+    id: "cluster-kinetic",
+    label: "Cluster Kinetic",
+    baseColor: [0.05, 0.05, 0.05],
+    highlightColor: [0.13, 0.85, 0.29], // punchy green — same as Video 2 reference
+    popInDurationSec: 0.15,
+    fontFamily: "Anton, Bebas Neue, Montserrat, Inter, sans-serif",
+    fontSize: 96,
+    strokeWidth: 0,
+    shadowOpacity: 0,
+    verticalPosition: 0.5,
+    isNew: true,
+    textCase: "lower",
+    bold: true,
+    letterSpacing: -2,
+    cluster: {
+      heroScale: 2.6,
+      scatterRadius: 240,
+      maxRotationDeg: 8,
+      // heroColor omitted → falls back to highlightColor (the green)
+    },
   },
 };
 

@@ -58,6 +58,9 @@ const COMPOSITION_BY_STYLE: Record<CaptionStyleId, string> = {
   "kalakar":         "BoldViral",
   "kalakar-shadow":  "BoldViral",
   "named-style":     "BoldViral",
+  // Cluster mode swaps in ClusterCaption inside the BoldViral shell;
+  // the composition wrapper is identical, so the same host works.
+  "cluster-kinetic": "BoldViral",
 };
 
 const AUDIO_EXTS = new Set([".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac", ".opus", ".wma"]);
