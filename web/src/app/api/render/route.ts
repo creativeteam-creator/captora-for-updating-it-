@@ -341,6 +341,58 @@ export async function POST(req: NextRequest) {
     const contentType = transparent ? "video/quicktime" : "video/mp4";
 
     outPath = join(tmpdir(), `captora-render-${randomUUID()}.${outExt}`);
+
+    // ───── Pre-flight disk-space check ─────
+    // ProRes 4444 (Transparent mode) writes ~6 MB per PNG frame to the
+    // system temp dir. A 106-second render fills ~19 GB just for the
+    // temp PNGs before FFmpeg mux, plus ~350 MB for the final MOV. If
+    // the user's boot volume is close to full, FFmpeg crashes mid-mux
+    // with "No space left on device", which in turn kills the Next.js
+    // child before it can send the JSON error — the browser sees the
+    // generic "Failed to fetch" and the user has no idea what happened.
+    //
+    // Check BEFORE renderMedia() burns 20 minutes. Surface a clear
+    // actionable message so users know to free space or drop the
+    // Transparent toggle.
+    try {
+      const fsp = await import("fs/promises");
+      // Node 18.15+ ships fs.statfs; older Nodes lack it. Guard.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const anyFsp: any = fsp as any;
+      if (typeof anyFsp.statfs === "function") {
+        const stats = await anyFsp.statfs(tmpdir());
+        const availableBytes = Number(stats.bavail) * Number(stats.bsize);
+        // Rough per-second footprint:
+        //   Transparent (ProRes 4444, PNG frames): ~200 MB/s
+        //   Regular  (H.264, JPEG frames):        ~15 MB/s
+        // Plus a 2 GB safety cushion for Chromium boot + logs.
+        const perSecMB = transparent ? 200 : 15;
+        const durationSecEstimate = Number(durationSec) || 60;
+        const neededBytes =
+          durationSecEstimate * perSecMB * 1024 * 1024 + 2 * 1024 * 1024 * 1024;
+        if (availableBytes < neededBytes) {
+          const availableGB = (availableBytes / 1e9).toFixed(1);
+          const neededGB = (neededBytes / 1e9).toFixed(1);
+          throw new Error(
+            `Not enough disk space to render. ` +
+              `${availableGB} GB free but this render needs ~${neededGB} GB temp space` +
+              (transparent
+                ? ` (Transparent mode uses ProRes 4444 — 20x more temp space than regular MP4). ` +
+                  `Free up space, OR uncheck Transparent and export as MP4 instead.`
+                : `. Free up disk space and try again.`)
+          );
+        }
+      }
+    } catch (err) {
+      // If the pre-check itself threw our own message, re-throw so the
+      // caller sees it. Otherwise (missing statfs, permission error)
+      // silently continue — the render might still succeed, and it's
+      // better to try than to block on a false negative.
+      if (err instanceof Error && err.message.startsWith("Not enough disk")) {
+        throw err;
+      }
+    }
+
     const tRender = Date.now();
     await renderMedia({
       composition,
