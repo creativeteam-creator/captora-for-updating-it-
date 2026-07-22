@@ -7,6 +7,8 @@ import { ENTRANCE_VARIANT_CYCLE, pickVariant, type EntranceVariant } from "../li
 import { PhraseCaption } from "./PhraseCaption";
 import { ClusterCaption } from "./ClusterCaption";
 import { StackCaption } from "./StackCaption";
+import { StickerStackCaption } from "./StickerStackCaption";
+import { NeonPillCaption } from "./NeonPillCaption";
 
 interface Props {
   words: WhisperWord[];
@@ -155,7 +157,23 @@ export function CaptionsTimeline({ words, style, lineAnimations, lineStyles, wor
             durationInFrames={durationFrames}
             name={line.words.map((w) => w.word).join(" ")}
           >
-            {lineStyle.stack ? (
+            {lineStyle.neonPill ? (
+              <NeonPillCaption
+                words={line.words}
+                phraseStartSec={phraseStartSec}
+                style={lineStyle}
+                phraseIndex={i}
+                wordSizes={wordSizes}
+              />
+            ) : lineStyle.stickerStack ? (
+              <StickerStackCaption
+                words={line.words}
+                phraseStartSec={phraseStartSec}
+                style={lineStyle}
+                phraseIndex={i}
+                wordSizes={wordSizes}
+              />
+            ) : lineStyle.stack ? (
               <StackCaption
                 words={line.words}
                 phraseStartSec={phraseStartSec}

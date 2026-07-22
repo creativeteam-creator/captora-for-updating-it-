@@ -41,7 +41,9 @@ export type CaptionStyleId =
   | "kalakar-shadow"
   | "named-style"
   | "cluster-kinetic"
-  | "word-pile-stack";
+  | "word-pile-stack"
+  | "vertical-sticker-stack"
+  | "neon-pill-bar";
 
 export type RGB = [number, number, number];
 
@@ -177,6 +179,15 @@ export interface CaptionStyle {
    */
   stack?: {
     enabled: true;
+  };
+  /** Vertical sticker stack mode — words stack top→bottom on one
+   *  side; newest word highlighted with neon glow. */
+  stickerStack?: {
+    side?: "left" | "right";
+  };
+  /** Neon pill bar — glowing rounded pill; palette cycles per phrase. */
+  neonPill?: {
+    palette?: RGB[];
   };
 }
 
@@ -852,6 +863,42 @@ export const CAPTION_STYLES: Record<CaptionStyleId, CaptionStyle> = {
       scatterRadius: 260,
     },
     stack: { enabled: true },
+  },
+  "vertical-sticker-stack": {
+    id: "vertical-sticker-stack",
+    label: "Vertical Sticker Stack",
+    description: "Lyric-video stack · side-anchored · newest word neon glow",
+    isNew: true,
+    baseColor: [1, 1, 1],
+    highlightColor: [1.0, 0.95, 0.15],
+    popInDurationSec: 0.15,
+    fontFamily: "Inter, Aeonik, Montserrat, sans-serif",
+    fontSize: 84,
+    strokeWidth: 0,
+    shadowOpacity: 0.6,
+    verticalPosition: 0.5,
+    textCase: "lower",
+    bold: true,
+    letterSpacing: -1,
+    stickerStack: { side: "left" },
+  },
+  "neon-pill-bar": {
+    id: "neon-pill-bar",
+    label: "Neon Pill Bar",
+    description: "Glowing neon pill · keyword accent · yellow/green/purple cycle",
+    isNew: true,
+    baseColor: [1, 1, 1],
+    highlightColor: [1.0, 0.95, 0.1],
+    popInDurationSec: 0.18,
+    fontFamily: "Inter, Aeonik, Montserrat, sans-serif",
+    fontSize: 56,
+    strokeWidth: 0,
+    shadowOpacity: 0,
+    verticalPosition: 0.5,
+    textCase: "lower",
+    bold: true,
+    letterSpacing: -0.5,
+    neonPill: {},
   },
 };
 

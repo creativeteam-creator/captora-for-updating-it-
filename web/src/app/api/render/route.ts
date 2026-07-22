@@ -63,6 +63,10 @@ const COMPOSITION_BY_STYLE: Record<CaptionStyleId, string> = {
   "cluster-kinetic": "BoldViral",
   // Stack mode swaps in StackCaption inside the same BoldViral shell.
   "word-pile-stack": "BoldViral",
+  // Sticker stack + Neon pill both swap their own component inside the
+  // same BoldViral host; the composition wrapper doesn't need to change.
+  "vertical-sticker-stack": "BoldViral",
+  "neon-pill-bar":          "BoldViral",
 };
 
 const AUDIO_EXTS = new Set([".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac", ".opus", ".wma"]);

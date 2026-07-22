@@ -41,7 +41,9 @@ export type CaptionStyleId =
   | "kalakar-shadow"
   | "named-style"
   | "cluster-kinetic"
-  | "word-pile-stack";
+  | "word-pile-stack"
+  | "vertical-sticker-stack"
+  | "neon-pill-bar";
 
 export type RGB = [number, number, number];
 
@@ -257,6 +259,27 @@ export interface CaptionStyle {
     /** True to enable. Field is an object for future tuning knobs
      *  (max visible words, shrink factor, drift direction, etc.). */
     enabled: true;
+  };
+  /**
+   * Vertical "sticker stack" mode — from the "new" reference video
+   * frames 3/50/60. Words stack top→bottom on one side of the frame,
+   * one word per line. Newest word gets highlightColor + neon glow;
+   * older words fade to muted white. When present, StickerStackCaption
+   * takes over from PhraseCaption / ClusterCaption / StackCaption.
+   */
+  stickerStack?: {
+    /** Which side of the frame to anchor to. Default "left". */
+    side?: "left" | "right";
+  };
+  /**
+   * Neon Pill Bar mode — from the "new" reference video frame 45.
+   * Whole phrase renders inside a full-width rounded pill with a
+   * glowing neon border. The first word takes the accent color; the
+   * rest of the phrase stays white. Border color cycles per phrase.
+   */
+  neonPill?: {
+    /** Palette to cycle per phrase. Defaults to yellow/green/purple. */
+    palette?: RGB[];
   };
 }
 
@@ -949,6 +972,40 @@ export const CAPTION_STYLES: Record<CaptionStyleId, CaptionStyle> = {
       scatterRadius: 260,
     },
     stack: { enabled: true },
+  },
+  "vertical-sticker-stack": {
+    id: "vertical-sticker-stack",
+    label: "Vertical Sticker Stack",
+    baseColor: [1, 1, 1],
+    highlightColor: [1.0, 0.95, 0.15], // punchy yellow — matches ref frames 3 & 60
+    popInDurationSec: 0.15,
+    fontFamily: "Inter, Aeonik, Montserrat, sans-serif",
+    fontSize: 84,
+    strokeWidth: 0,
+    shadowOpacity: 0.6,
+    verticalPosition: 0.5,
+    isNew: true,
+    textCase: "lower",
+    bold: true,
+    letterSpacing: -1,
+    stickerStack: { side: "left" },
+  },
+  "neon-pill-bar": {
+    id: "neon-pill-bar",
+    label: "Neon Pill Bar",
+    baseColor: [1, 1, 1],
+    highlightColor: [1.0, 0.95, 0.1], // yellow (first pill in the cycle)
+    popInDurationSec: 0.18,
+    fontFamily: "Inter, Aeonik, Montserrat, sans-serif",
+    fontSize: 56,
+    strokeWidth: 0,
+    shadowOpacity: 0,
+    verticalPosition: 0.5,
+    isNew: true,
+    textCase: "lower",
+    bold: true,
+    letterSpacing: -0.5,
+    neonPill: {}, // uses default yellow/green/purple palette
   },
 };
 
