@@ -65,6 +65,7 @@ export default function Home() {
   const [searchQuery, setSearchQuery] = useState("");
   const [renderError, setRenderError] = useState<string | null>(null);
   const [transparent, setTransparent] = useState(false);
+  const [retranscribing, setRetranscribing] = useState(false);
   /**
    * Live-editable copy of the current project's words. Initialised from
    * `project.whisper.words` whenever a project enters the editor (fresh
@@ -447,6 +448,59 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editedWords, status.kind]);
 
+  const onRetranscribe = async () => {
+    if (status.kind !== "transcribed" && status.kind !== "rendered") return;
+    const { project, file } = status;
+    setRenderError(null);
+    setRetranscribing(true);
+    try {
+      // Desktop: rewrite the source file to sessionDir path so the
+      // retranscribe route can read it even if the previous temp copy
+      // got cleaned up by the 48h sweep or Windows Defender. Idempotent
+      // — if the file is already there this is a same-path copy.
+      let localFilePath = "";
+      if (isElectron()) {
+        localFilePath = await saveSourceFileLocally(file, project.ext, project.id);
+      }
+      const res = await fetch("/api/retranscribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId: project.id,
+          localFilePath: localFilePath || undefined,
+          // Keep the same language/script/accuracy the project was
+          // originally transcribed with. If the user wants to change,
+          // they can re-drop the file from Home to go through the
+          // Prepare Media modal again.
+        }),
+      });
+      const json = await res.json();
+      if (!json.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      // Replace project state with the fresh transcript. Keep all
+      // other project fields (title, styleId, overrides, renderUrl…)
+      // untouched — only the transcription-derived fields change.
+      const updatedProject: ProjectRecord = {
+        ...project,
+        provider: json.provider ?? project.provider,
+        whisper: {
+          task: "transcribe",
+          language: json.result?.language ?? project.whisper.language,
+          duration: json.result?.duration ?? project.whisper.duration,
+          text: json.result?.text ?? project.whisper.text,
+          words: json.result?.words ?? project.whisper.words,
+        },
+      };
+      setEditedWords(json.result?.words ?? project.whisper.words);
+      setStatus({ kind: "transcribed", project: updatedProject, file });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("[onRetranscribe] failed:", msg);
+      setRenderError(`Re-transcribe failed: ${msg}`);
+    } finally {
+      setRetranscribing(false);
+    }
+  };
+
   const onRender = async () => {
     if (status.kind !== "transcribed" && status.kind !== "rendered") return;
     const { project, file } = status;
@@ -726,6 +780,8 @@ export default function Home() {
           onBack={onResetAndUpload}
           onExport={onRender}
           exporting={rendering}
+          onRetranscribe={onRetranscribe}
+          retranscribing={retranscribing}
           exportDownloadUrl={status.kind === "rendered" ? status.downloadUrl : undefined}
           exportError={renderError}
           transparent={transparent}

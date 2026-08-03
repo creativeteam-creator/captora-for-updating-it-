@@ -100,6 +100,12 @@ interface Props {
    *  captions list (hover ⏎ between two words). */
   userBreaks: Set<number>;
   onUserBreaksChange: (next: Set<number>) => void;
+  /** Kick off a fresh transcription pass on the same source file.
+   *  Replaces the current transcript in place (destructive — any
+   *  manual edits are lost). Optional: when absent, the button
+   *  hides. */
+  onRetranscribe?: () => void;
+  retranscribing?: boolean;
 }
 
 export function EditorView({
@@ -107,6 +113,7 @@ export function EditorView({
   overrides, onOverridesChange,
   words, onWordsChange,
   onBack, onExport, exporting, exportDownloadUrl, exportError,
+  onRetranscribe, retranscribing,
   transparent, onTransparentChange,
   userFonts, onUserFontsChanged,
   canvasWidth, canvasHeight,
@@ -402,6 +409,41 @@ export function EditorView({
                 {project.whisper.words.length} words · {project.whisper.duration.toFixed(1)}s · {project.spokenLanguageLabel} ({project.writingScriptLabel})
               </div>
             </div>
+            {/* Re-transcribe — throws away current transcript + edits
+                and runs the STT pipeline again on the same source
+                file. Useful when the first pass had wrong words or the
+                user wants to try a different accuracy tier. Confirms
+                before firing (destructive). */}
+            {onRetranscribe && (
+              <button
+                type="button"
+                onClick={() => {
+                  const ok = window.confirm(
+                    "Re-transcribe this file? Your caption edits will be replaced with a fresh transcription."
+                  );
+                  if (ok) onRetranscribe();
+                }}
+                disabled={retranscribing || exporting}
+                className="ml-2 flex items-center gap-1.5 rounded-md border border-[var(--border)] bg-[var(--bg-elevated)] px-2.5 py-1.5 text-[11px] text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)] disabled:opacity-50 disabled:cursor-not-allowed"
+                title="Re-run transcription on the same source file (replaces current transcript)"
+              >
+                {retranscribing ? (
+                  <>
+                    <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                    Re-transcribing…
+                  </>
+                ) : (
+                  <>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="23 4 23 10 17 10" />
+                      <polyline points="1 20 1 14 7 14" />
+                      <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+                    </svg>
+                    Re-transcribe
+                  </>
+                )}
+              </button>
+            )}
           </div>
 
           <div className="flex items-center gap-2">
