@@ -440,7 +440,16 @@ export async function POST(req: NextRequest) {
         const localRendersDir = getLocalRendersDir();
         await mkdir(localRendersDir, { recursive: true });
         const safeProject = projectId.slice(0, 8);
-        const targetName = `captora-${style}-${safeProject}.${outExt}`;
+        // Include a minute-precision timestamp so re-rendering the
+        // same project + same template doesn't silently overwrite
+        // the previous file. Users were seeing 6 identical filenames
+        // in their renders folder and couldn't tell which was which.
+        const d = new Date();
+        const pad = (n: number) => String(n).padStart(2, "0");
+        const stamp =
+          `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
+          `-${pad(d.getHours())}${pad(d.getMinutes())}`;
+        const targetName = `captora-${style}-${safeProject}-${stamp}.${outExt}`;
         const targetPath = join(localRendersDir, targetName);
         await copyFile(outPath, targetPath);
         renderRefPath = targetPath;
@@ -487,7 +496,15 @@ export async function POST(req: NextRequest) {
     // the whole MP4 in memory — the kernel pipes the file through to
     // the client one chunk at a time. Browsers handle multi-GB blob
     // downloads fine; the bottleneck was always server-side readFile.
-    const filename = `captora-${style}-${projectId.slice(0, 8)}.${outExt}`;
+    // Content-Disposition filename — same scheme as the desktop
+    // copy above so browser-downloaded exports also get unique names
+    // per render.
+    const dResp = new Date();
+    const padR = (n: number) => String(n).padStart(2, "0");
+    const stampResp =
+      `${dResp.getFullYear()}-${padR(dResp.getMonth() + 1)}-${padR(dResp.getDate())}` +
+      `-${padR(dResp.getHours())}${padR(dResp.getMinutes())}`;
+    const filename = `captora-${style}-${projectId.slice(0, 8)}-${stampResp}.${outExt}`;
     const nodeStream = createReadStream(outPath);
     // Hook cleanup to the stream's lifecycle: the finally block at the
     // end of this handler runs as soon as we return, well before the

@@ -108,6 +108,38 @@ interface Props {
   retranscribing?: boolean;
 }
 
+/**
+ * Build a filesystem-safe unique filename for an exported render.
+ * Format: `<project-title> - <template> - <yyyy-mm-dd-HHMM>.<ext>`
+ *
+ * The title comes first because that's what users scan a folder by,
+ * followed by the template so multiple exports of the same project
+ * with different templates read as distinct at a glance, then a
+ * minute-precision timestamp so re-exporting the same template
+ * doesn't silently overwrite the previous download.
+ *
+ * Strips filesystem-hostile characters from the title (Windows blocks
+ * <>:"|?*\/ in filenames) and clamps overall length so the file
+ * doesn't hit the 255-char path limit on Windows.
+ */
+function buildExportFilename(
+  title: string,
+  templateId: string,
+  transparent: boolean
+): string {
+  const ext = transparent ? "mov" : "mp4";
+  const safeTitle = (title || "captora")
+    .replace(/[<>:"|?*\\/]+/g, "")
+    .trim()
+    .slice(0, 80);
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const stamp =
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
+    `-${pad(d.getHours())}${pad(d.getMinutes())}`;
+  return `${safeTitle} - ${templateId} - ${stamp}.${ext}`;
+}
+
 export function EditorView({
   project, file, styleId, editingStyleId,
   overrides, onOverridesChange,
@@ -471,7 +503,16 @@ export function EditorView({
             {exportDownloadUrl && (
               <a
                 href={exportDownloadUrl}
-                download={`captora-${styleId}-${project.title}.${transparent ? "mov" : "mp4"}`}
+                // Filename format puts the project TITLE first so users
+                // can scan a folder of exports by content, then the
+                // template name so multiple versions of the same
+                // project are visually distinct, then a compact
+                // yyyy-mm-dd-HHMM timestamp so re-exporting the same
+                // template doesn't silently overwrite the previous
+                // download. Without the timestamp all downloads of
+                // e.g. bold-viral for "Bald Before 25…" collapse onto
+                // one filename in the browser's Downloads folder.
+                download={buildExportFilename(project.title, styleId, transparent)}
                 className="rounded-md border border-[var(--accent)] bg-[var(--accent-bg)] px-3 py-2 text-xs font-semibold text-[var(--accent)] hover:bg-[var(--accent)]/20"
               >
                 ↓ Download
