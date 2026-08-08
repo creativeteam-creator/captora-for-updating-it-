@@ -904,6 +904,107 @@ export const CAPTION_STYLES: Record<CaptionStyleId, CaptionStyle> = {
 
 export const DEFAULT_STYLE: CaptionStyleId = "captora-glow";
 
+/**
+ * Template categories — surface groups in the Templates panel so users
+ * can filter 34 templates without scrolling a single flat list. Ordered
+ * roughly by prominence: newer kinetic styles first, then core groups
+ * in decreasing frequency of use.
+ */
+export type TemplateCategory =
+  | "kinetic"
+  | "bold"
+  | "neon"
+  | "clean"
+  | "boxed"
+  | "effect";
+
+export const CATEGORY_LABELS: Record<TemplateCategory, string> = {
+  kinetic: "Kinetic",
+  bold: "Bold",
+  neon: "Neon",
+  clean: "Clean",
+  boxed: "Boxed",
+  effect: "Effect",
+};
+
+/**
+ * Ordered list of categories for chip rows — this order drives the
+ * left-to-right order in the TemplatesPanel filter bar.
+ */
+export const CATEGORY_ORDER: TemplateCategory[] = [
+  "kinetic",
+  "bold",
+  "neon",
+  "clean",
+  "boxed",
+  "effect",
+];
+
+/**
+ * Category assignment for every CaptionStyleId. Grouped here (instead
+ * of inline on each template) so a template's category can be adjusted
+ * without opening the 800-line preset file, and so future auto-tests
+ * can round-trip category → template counts.
+ */
+export const TEMPLATE_CATEGORY: Record<CaptionStyleId, TemplateCategory> = {
+  // ── Kinetic — motion-forward layouts, per-word entrance emphasis ────
+  "kinetic-pop":            "kinetic",
+  "bouncy-mix":             "kinetic",
+  "slide-cascade":          "kinetic",
+  "drop-stack":             "kinetic",
+  "rotate-flair":           "kinetic",
+  "cluster-kinetic":        "kinetic",
+  "word-pile-stack":        "kinetic",
+  "vertical-sticker-stack": "kinetic",
+
+  // ── Bold — thick strokes, high-contrast, viral short-form ───────────
+  "bold-viral":       "bold",
+  "hormozi":          "bold",
+  "mr-beast":         "bold",
+  "top-up":           "bold",
+  "splash":           "bold",
+  "ziada":            "bold",
+  "center-power":     "bold",
+
+  // ── Neon — glow effects, luminous accent ────────────────────────────
+  "neon-pill-bar":    "neon",
+  "captora-glow":     "neon",
+  "liquid-glass":     "neon",
+
+  // ── Clean — minimal, editorial ──────────────────────────────────────
+  "clean-medical":    "clean",
+  "tech-minimal":     "clean",
+  "ali-abdaal":       "clean",
+  "tiktok-top":       "clean",
+  "caption-bottom":   "clean",
+
+  // ── Boxed — pill/chip backgrounds, sticker feel ─────────────────────
+  "bubble-style":     "boxed",
+  "editing-skool":    "boxed",
+  "word-chips":       "boxed",
+  "kalakar":          "boxed",
+  "kalakar-shadow":   "boxed",
+  "named-style":      "boxed",
+
+  // ── Effect — special renders (blur reveals, pixel, highlight) ──────
+  "blur-reveal":      "effect",
+  "pixelated-word":   "effect",
+  "highlight-word":   "effect",
+  "captora":          "effect",
+  "captora-shadow":   "effect",
+};
+
+/** Count of templates in each category — memoised at module load so
+ *  the TemplatesPanel chip row can show "Kinetic (8)" style counts
+ *  without recomputing on every render. */
+export const CATEGORY_COUNTS: Record<TemplateCategory, number> = (() => {
+  const out: Record<TemplateCategory, number> = {
+    kinetic: 0, bold: 0, neon: 0, clean: 0, boxed: 0, effect: 0,
+  };
+  for (const cat of Object.values(TEMPLATE_CATEGORY)) out[cat]++;
+  return out;
+})();
+
 export function applyStyleOverrides(
   base: CaptionStyle,
   overrides: CaptionStyleOverrides | undefined

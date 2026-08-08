@@ -13,9 +13,14 @@
 import { useState } from "react";
 import {
   CAPTION_STYLES,
+  CATEGORY_ORDER,
+  CATEGORY_LABELS,
+  CATEGORY_COUNTS,
+  TEMPLATE_CATEGORY,
   rgbToCss,
   type CaptionStyle,
   type CaptionStyleId,
+  type TemplateCategory,
 } from "@/lib/styles";
 
 interface Props {
@@ -48,10 +53,14 @@ export function TemplatesPanel({
 }: Props) {
   const [tab, setTab] = useState<SubTab>("builtin");
   const [filter, setFilter] = useState("");
+  // null = "All" (no category filter). Otherwise narrows to that category.
+  const [category, setCategory] = useState<TemplateCategory | null>(null);
 
-  const styles = Object.values(CAPTION_STYLES).filter((s) =>
-    s.label.toLowerCase().includes(filter.toLowerCase())
-  );
+  const styles = Object.values(CAPTION_STYLES).filter((s) => {
+    if (!s.label.toLowerCase().includes(filter.toLowerCase())) return false;
+    if (category && TEMPLATE_CATEGORY[s.id] !== category) return false;
+    return true;
+  });
 
   // The currently-selected line's per-line override (if any), so the
   // matching template card can show a different "ACTIVE FOR THIS LINE"
@@ -153,6 +162,30 @@ export function TemplatesPanel({
         </button>
       </div>
 
+      {/* Category chips — horizontal scrollable row. "All" resets the
+          filter; each chip narrows to that category. Counts shown so
+          users can gauge each category's size at a glance. Only rendered
+          in the Built-in tab; My Presets doesn't have categories yet. */}
+      {tab === "builtin" && (
+        <div className="flex gap-1.5 overflow-x-auto border-b border-[var(--border)] px-3 py-2">
+          <CategoryChip
+            label="All"
+            count={Object.keys(CAPTION_STYLES).length}
+            active={category === null}
+            onClick={() => setCategory(null)}
+          />
+          {CATEGORY_ORDER.map((cat) => (
+            <CategoryChip
+              key={cat}
+              label={CATEGORY_LABELS[cat]}
+              count={CATEGORY_COUNTS[cat]}
+              active={category === cat}
+              onClick={() => setCategory(cat)}
+            />
+          ))}
+        </div>
+      )}
+
       <div className="flex-1 space-y-3 overflow-y-auto p-3">
         {tab === "builtin" ? (
           styles.length === 0 ? (
@@ -176,6 +209,43 @@ export function TemplatesPanel({
         )}
       </div>
     </div>
+  );
+}
+
+/** Small pill for the category filter row. Compact, accent-highlighted
+ *  when active. Rendered above the template gallery. */
+function CategoryChip({
+  label,
+  count,
+  active,
+  onClick,
+}: {
+  label: string;
+  count: number;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide transition ${
+        active
+          ? "bg-[var(--accent)] text-black"
+          : "border border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--text-muted)] hover:border-[var(--accent)] hover:text-[var(--text)]"
+      }`}
+    >
+      {label}
+      <span
+        className={`rounded-full px-1 text-[9px] font-normal ${
+          active
+            ? "bg-black/20 text-black"
+            : "bg-[var(--bg)] text-[var(--text-muted)]"
+        }`}
+      >
+        {count}
+      </span>
+    </button>
   );
 }
 
