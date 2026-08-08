@@ -403,6 +403,30 @@ export function TextPanel({ base, overrides, onChange, onReset, userFonts, onUse
           </div>
         </ControlRow>
 
+        {/* ── Sync — hoisted to the top so users can fix audio↔caption
+            drift without hunting through nested sections. Previously
+            lived inside the collapsed "Animation" section, which is
+            why the "captions don't match audio" complaints kept
+            coming even though the fix has always been one slider. */}
+        <Section title="Caption Sync" defaultOpen>
+        <ControlRow label="Lead / Lag (ms)">
+          <div className="space-y-1">
+            <SliderWithNumber
+              value={-Math.round((merged.wordAnticipationSec ?? 0.10) * 1000)}
+              min={-1000}
+              max={1000}
+              step={10}
+              unit="ms"
+              onChange={(v) => set("wordAnticipationSec", -v / 1000)}
+            />
+            <div className="text-[10px] text-[var(--text-muted)]">
+              Negative = captions arrive earlier than the audio (recommended for Hindi / Hinglish, default −100 ms).
+              Positive = captions arrive later. Adjust in 10 ms steps until the highlight lands on the spoken word.
+            </div>
+          </div>
+        </ControlRow>
+        </Section>
+
         <Section title="Font" defaultOpen>
         <ControlRow label="Family">
           <select
@@ -874,27 +898,7 @@ export function TextPanel({ base, overrides, onChange, onReset, userFonts, onUse
           />
         </ControlRow>
 
-        {/* ── Caption Sync ─────────────────────────────────────────────────
-            Whisper timestamps lag the perceptual word onset by 80–150 ms
-            (especially Hindi / mixed language). Negative value = highlight
-            appears EARLIER than the measured timestamp, which feels correct.
-            Positive value = highlight appears LATER.
-            Default is −100 ms (0.10 s anticipation). */}
-        <ControlRow label="Caption Sync (ms)">
-          <div className="space-y-1">
-            <SliderWithNumber
-              value={-Math.round((merged.wordAnticipationSec ?? 0.10) * 1000)}
-              min={-300}
-              max={300}
-              step={10}
-              unit="ms"
-              onChange={(v) => set("wordAnticipationSec", -v / 1000)}
-            />
-            <div className="text-[10px] text-[var(--text-muted)]">
-              Negative = caption highlights earlier (recommended for Hindi/mixed)
-            </div>
-          </div>
-        </ControlRow>
+        {/* Caption Sync moved to its own top-level Section above. */}
         </Section>
       </div>
     </div>
