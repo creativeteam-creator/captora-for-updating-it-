@@ -29,6 +29,11 @@ import {
 import type { ProjectRecord } from "@/lib/projects";
 import type { WhisperWord } from "@/lib/whisper";
 import type { UserFont } from "@/lib/userFonts";
+import {
+  whisperWordsToSrt,
+  whisperWordsToVtt,
+  downloadTextFile,
+} from "@/lib/subtitles";
 
 export type RightTab = "text" | "templates" | "transitions" | "audio";
 
@@ -477,6 +482,17 @@ export function EditorView({
                 ↓ Download
               </a>
             )}
+            {/* Subtitle sidecar downloads — SRT for YouTube/Instagram/
+                traditional players, VTT for HTML5 <track>. Available
+                anytime, don't need a render first — captions come
+                straight from the edited word timings. Sits behind a
+                tiny "Subtitles" dropdown so it doesn't crowd the
+                header for users who never touch them. */}
+            <SubtitlesDropdown
+              words={words}
+              userBreaks={userBreaks}
+              projectTitle={project.title}
+            />
             <button
               type="button"
               onClick={onExport}
@@ -783,6 +799,89 @@ function Placeholder({ title, hint }: { title: string; hint: string }) {
     <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
       <div className="text-sm font-semibold text-[var(--text-muted)]">{title}</div>
       <div className="text-xs text-[var(--text-muted)]">{hint}</div>
+    </div>
+  );
+}
+
+/**
+ * Small "Subtitles ▾" dropdown in the editor header. Reveals SRT / VTT
+ * download options built from the current edited word timings — no
+ * render required, downloads instantly.
+ *
+ * Kept as a tight two-item menu so it doesn't compete with the primary
+ * Export button for attention; users who don't need subtitle sidecars
+ * never open it.
+ */
+function SubtitlesDropdown({
+  words,
+  userBreaks,
+  projectTitle,
+}: {
+  words: WhisperWord[];
+  userBreaks: Set<number>;
+  projectTitle: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Close on outside click — small custom menu, not worth wiring a
+  // full <Popover> abstraction for two links.
+  useEffect(() => {
+    if (!open) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (!containerRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [open]);
+
+  const safeTitle = (projectTitle || "captions").replace(/[<>:"|?*\\/]+/g, "");
+
+  const handleSrt = () => {
+    const srt = whisperWordsToSrt(words, { userBreaks });
+    downloadTextFile(`${safeTitle}.srt`, srt, "application/x-subrip;charset=utf-8");
+    setOpen(false);
+  };
+  const handleVtt = () => {
+    const vtt = whisperWordsToVtt(words, { userBreaks });
+    downloadTextFile(`${safeTitle}.vtt`, vtt, "text/vtt;charset=utf-8");
+    setOpen(false);
+  };
+
+  return (
+    <div ref={containerRef} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        disabled={words.length === 0}
+        className="flex items-center gap-1 rounded-md border border-[var(--border)] bg-[var(--bg-elevated)] px-2.5 py-2 text-[11px] text-[var(--text-muted)] hover:border-[var(--accent)] hover:text-[var(--text)] disabled:opacity-50 disabled:cursor-not-allowed"
+        title="Download SRT or VTT subtitle sidecar"
+      >
+        Subtitles
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+          <polyline points="6 9 12 15 18 9" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full z-30 mt-1 flex w-40 flex-col overflow-hidden rounded-md border border-[var(--border)] bg-[var(--bg-elevated)] shadow-lg">
+          <button
+            type="button"
+            onClick={handleSrt}
+            className="flex flex-col items-start px-3 py-2 text-left hover:bg-[var(--bg-hover)]"
+          >
+            <span className="text-xs font-semibold text-[var(--text)]">Download .srt</span>
+            <span className="text-[10px] text-[var(--text-muted)]">YouTube, Instagram, VLC</span>
+          </button>
+          <button
+            type="button"
+            onClick={handleVtt}
+            className="flex flex-col items-start border-t border-[var(--border)] px-3 py-2 text-left hover:bg-[var(--bg-hover)]"
+          >
+            <span className="text-xs font-semibold text-[var(--text)]">Download .vtt</span>
+            <span className="text-[10px] text-[var(--text-muted)]">HTML5 &lt;track&gt;, web players</span>
+          </button>
+        </div>
+      )}
     </div>
   );
 }

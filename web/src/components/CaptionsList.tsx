@@ -321,14 +321,219 @@ export function CaptionsList({
     [words, onWordsChange]
   );
 
+  // ── Find & Replace ────────────────────────────────────────────────────
+  // Toggled with Ctrl/Cmd+F. Case-insensitive substring match against
+  // each word's text. Prev/Next cycle through matches; Replace swaps
+  // the current match; Replace All swaps every match in one go and
+  // pushes one snapshot to the undo stack.
+  const [findOpen, setFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState("");
+  const [replaceQuery, setReplaceQuery] = useState("");
+  const [currentMatch, setCurrentMatch] = useState(0);
+  const findInputRef = useRef<HTMLInputElement>(null);
+
+  // Indexes of words that contain the current query (case-insensitive).
+  const matchIndexes = useMemo(() => {
+    const q = findQuery.trim().toLowerCase();
+    if (!q) return [] as number[];
+    const out: number[] = [];
+    for (let i = 0; i < words.length; i++) {
+      if (words[i].word.toLowerCase().includes(q)) out.push(i);
+    }
+    return out;
+  }, [findQuery, words]);
+
+  // Reset the current-match pointer whenever the match set changes so
+  // Enter/Next always lands on a valid index.
+  useEffect(() => {
+    if (currentMatch >= matchIndexes.length) setCurrentMatch(0);
+  }, [matchIndexes.length, currentMatch]);
+
+  // Ctrl+F / Cmd+F opens the find bar and focuses the input. Escape
+  // closes. Global keydown listener — only active while this component
+  // is mounted (which matches the editor's Captions tab lifetime).
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const isMod = e.ctrlKey || e.metaKey;
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (isMod && e.key.toLowerCase() === "f") {
+        // Don't fight the browser's built-in find inside input/textarea.
+        if (tag === "INPUT" || tag === "TEXTAREA") return;
+        e.preventDefault();
+        setFindOpen(true);
+        setTimeout(() => findInputRef.current?.focus(), 0);
+      } else if (e.key === "Escape" && findOpen) {
+        setFindOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [findOpen]);
+
+  const goToMatch = (delta: 1 | -1) => {
+    if (matchIndexes.length === 0) return;
+    setCurrentMatch(
+      (matchIndexes.length + currentMatch + delta) % matchIndexes.length
+    );
+  };
+
+  // Replace only the currently-highlighted match. Preserves the word's
+  // start/end so per-word timings survive the edit.
+  const replaceCurrent = () => {
+    if (matchIndexes.length === 0 || !onWordsChange) return;
+    const wordIdx = matchIndexes[currentMatch];
+    const original = words[wordIdx];
+    const q = findQuery.trim();
+    if (!q) return;
+    const re = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+    const nextText = original.word.replace(re, replaceQuery);
+    const next = [...words];
+    next.splice(wordIdx, 1, { ...original, word: nextText });
+    onWordsChange(next);
+    // Advance to next match so repeated presses walk through.
+    setTimeout(() => goToMatch(1), 0);
+  };
+
+  // Replace every occurrence across every word in one atomic update
+  // (single undo entry via the parent's onWordsChange snapshot).
+  const replaceAll = () => {
+    if (matchIndexes.length === 0 || !onWordsChange) return;
+    const q = findQuery.trim();
+    if (!q) return;
+    const re = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+    const next = words.map((w) => {
+      if (!w.word.toLowerCase().includes(q.toLowerCase())) return w;
+      return { ...w, word: w.word.replace(re, replaceQuery) };
+    });
+    onWordsChange(next);
+    setFindQuery("");
+  };
+
+  // Word index → position in the match list (or -1). Used by the
+  // renderer to underline every match and mark the current one.
+  const matchPositionByWordIdx = useMemo(() => {
+    const map = new Map<number, number>();
+    matchIndexes.forEach((idx, pos) => map.set(idx, pos));
+    return map;
+  }, [matchIndexes]);
+
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
         <div className="text-sm font-semibold">Captions</div>
-        <span className="text-[10px] text-[var(--text-muted)]">
-          Click to edit · Double-click to replace · Enter saves
-        </span>
+        <div className="flex items-center gap-2">
+          {onWordsChange && (
+            <button
+              type="button"
+              onClick={() => {
+                setFindOpen((v) => !v);
+                if (!findOpen) setTimeout(() => findInputRef.current?.focus(), 0);
+              }}
+              className={`flex h-6 w-6 items-center justify-center rounded-md border text-[11px] transition ${
+                findOpen
+                  ? "border-[var(--accent)] bg-[var(--accent-bg)] text-[var(--accent)]"
+                  : "border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--text-muted)] hover:border-[var(--accent)] hover:text-[var(--text)]"
+              }`}
+              title="Find & Replace (Ctrl/Cmd + F)"
+              aria-label="Toggle Find & Replace"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="11" cy="11" r="7" />
+                <path d="M21 21l-4.5-4.5" />
+              </svg>
+            </button>
+          )}
+          <span className="text-[10px] text-[var(--text-muted)]">
+            Click to edit · Enter saves
+          </span>
+        </div>
       </div>
+
+      {findOpen && (
+        <div className="flex flex-col gap-1 border-b border-[var(--border)] bg-[var(--bg-elevated)] px-3 py-2">
+          <div className="flex items-center gap-1">
+            <input
+              ref={findInputRef}
+              type="text"
+              value={findQuery}
+              onChange={(e) => setFindQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  goToMatch(e.shiftKey ? -1 : 1);
+                } else if (e.key === "Escape") {
+                  setFindOpen(false);
+                }
+              }}
+              placeholder="Find"
+              className="h-7 flex-1 rounded-md border border-[var(--border)] bg-[var(--bg)] px-2 text-xs text-[var(--text)] focus:border-[var(--accent)] focus:outline-none"
+            />
+            <span className="min-w-[52px] shrink-0 text-center text-[10px] tabular-nums text-[var(--text-muted)]">
+              {matchIndexes.length > 0
+                ? `${currentMatch + 1}/${matchIndexes.length}`
+                : "0/0"}
+            </span>
+            <button
+              type="button"
+              onClick={() => goToMatch(-1)}
+              disabled={matchIndexes.length === 0}
+              className="flex h-7 w-7 items-center justify-center rounded-md border border-[var(--border)] bg-[var(--bg)] text-[var(--text-muted)] hover:border-[var(--accent)] hover:text-[var(--text)] disabled:opacity-40 disabled:cursor-not-allowed"
+              title="Previous match (Shift + Enter)"
+            >
+              ↑
+            </button>
+            <button
+              type="button"
+              onClick={() => goToMatch(1)}
+              disabled={matchIndexes.length === 0}
+              className="flex h-7 w-7 items-center justify-center rounded-md border border-[var(--border)] bg-[var(--bg)] text-[var(--text-muted)] hover:border-[var(--accent)] hover:text-[var(--text)] disabled:opacity-40 disabled:cursor-not-allowed"
+              title="Next match (Enter)"
+            >
+              ↓
+            </button>
+            <button
+              type="button"
+              onClick={() => setFindOpen(false)}
+              className="flex h-7 w-7 items-center justify-center rounded-md text-[var(--text-muted)] hover:bg-[var(--bg-hover)] hover:text-[var(--text)]"
+              title="Close (Esc)"
+            >
+              ×
+            </button>
+          </div>
+          <div className="flex items-center gap-1">
+            <input
+              type="text"
+              value={replaceQuery}
+              onChange={(e) => setReplaceQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  if (e.shiftKey) replaceAll();
+                  else replaceCurrent();
+                }
+              }}
+              placeholder="Replace with"
+              className="h-7 flex-1 rounded-md border border-[var(--border)] bg-[var(--bg)] px-2 text-xs text-[var(--text)] focus:border-[var(--accent)] focus:outline-none"
+            />
+            <button
+              type="button"
+              onClick={replaceCurrent}
+              disabled={matchIndexes.length === 0}
+              className="rounded-md border border-[var(--border)] bg-[var(--bg)] px-2 py-1 text-[10px] uppercase tracking-wide text-[var(--text-muted)] hover:border-[var(--accent)] hover:text-[var(--text)] disabled:opacity-40 disabled:cursor-not-allowed"
+              title="Replace current match (Enter)"
+            >
+              Replace
+            </button>
+            <button
+              type="button"
+              onClick={replaceAll}
+              disabled={matchIndexes.length === 0}
+              className="rounded-md border border-[var(--accent)] bg-[var(--accent-bg)] px-2 py-1 text-[10px] uppercase tracking-wide text-[var(--accent)] hover:bg-[var(--accent)]/20 disabled:opacity-40 disabled:cursor-not-allowed"
+              title="Replace all matches (Shift + Enter)"
+            >
+              All
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="flex-1 overflow-y-auto px-2 py-2">
         {lines.length === 0 ? (
@@ -490,6 +695,14 @@ export function CaptionsList({
                       onWordSizesChange(updated);
                     };
                     const isActiveWord = activeWordIndex === absoluteIdx;
+                    // Find/Replace highlighting: every match gets a soft
+                    // amber background; the currently-selected match
+                    // (that Prev/Next cycles through) gets a stronger
+                    // amber ring so the user knows which one will
+                    // change on "Replace".
+                    const matchPos = matchPositionByWordIdx.get(absoluteIdx);
+                    const isFindMatch = matchPos !== undefined;
+                    const isCurrentMatch = isFindMatch && matchPos === currentMatch;
                     // Active-word pill: same accent color but full-fill +
                     // white text so the user can tell at a glance which
                     // word is being spoken right now. Wins over keyword
@@ -499,6 +712,20 @@ export function CaptionsList({
                       <span
                         onClick={() => beginEdit(absoluteIdx, w.word)}
                         className={`${baseCls} bg-[var(--accent)] font-semibold text-white shadow-sm`}
+                      >
+                        {w.word}
+                      </span>
+                    ) : isCurrentMatch ? (
+                      <span
+                        onClick={() => beginEdit(absoluteIdx, w.word)}
+                        className={`${baseCls} bg-amber-400 font-semibold text-black ring-2 ring-amber-500`}
+                      >
+                        {w.word}
+                      </span>
+                    ) : isFindMatch ? (
+                      <span
+                        onClick={() => beginEdit(absoluteIdx, w.word)}
+                        className={`${baseCls} bg-amber-400/40 text-[var(--text)]`}
                       >
                         {w.word}
                       </span>
