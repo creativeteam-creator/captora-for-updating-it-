@@ -16,6 +16,7 @@ import {
 import { downloadToFile } from "@/lib/supabase/storage-server";
 import { isDesktopMode, getLocalRendersDir, getLocalSessionsDir } from "@/lib/captora-mode";
 import { reportServerEvent } from "@/lib/telemetry-server";
+import { isValidProjectId, safeMediaExt } from "@/lib/pathSafety";
 
 export const runtime = "nodejs";
 // Renders involve bundling (~10–30s first call), Chromium boot, and
@@ -281,10 +282,27 @@ export async function POST(req: NextRequest) {
 
     // ───── Parse + validate body ─────
     const body = (await req.json()) as RenderBody;
-    const { projectId, ext, style, words, durationSec, computedStyle, transparent, customFonts, width, height, lineAnimations, lineStyles, userBreaks } = body;
-    if (!projectId || !ext || !style || !Array.isArray(words)) {
+    const { projectId, style, words, durationSec, computedStyle, transparent, customFonts, width, height, lineAnimations, lineStyles, userBreaks } = body;
+    if (!projectId || !body.ext || !style || !Array.isArray(words)) {
       return NextResponse.json(
         { ok: false, error: "Missing required fields: projectId, ext, style, words" },
+        { status: 400 }
+      );
+    }
+    // Both values are concatenated into filesystem paths below — the
+    // cached source path, and the staged copy inside the Remotion
+    // bundle's public folder. Validate before either is used. See
+    // lib/pathSafety.ts for why this is an allow-list.
+    if (!isValidProjectId(projectId)) {
+      return NextResponse.json(
+        { ok: false, error: "projectId must be a UUID" },
+        { status: 400 }
+      );
+    }
+    const ext = safeMediaExt(body.ext);
+    if (!ext) {
+      return NextResponse.json(
+        { ok: false, error: `Unsupported source extension: ${String(body.ext)}` },
         { status: 400 }
       );
     }
@@ -548,13 +566,20 @@ export async function POST(req: NextRequest) {
       // below; only the long-term cloud copy is sacrificed.
       const TWO_GIB = 2 * 1024 * 1024 * 1024;
       if (renderedSize < TWO_GIB) {
-        const mp4 = await readFile(outPath);
-        const upload = await uploadRender(supabase, user.id, projectId, mp4).catch(
-          (err) => {
-            console.warn("[/api/render] upload to storage failed:", err);
-            return null;
-          }
-        );
+        const rendered = await readFile(outPath);
+        // Pass the real container so a transparent ProRes render is
+        // stored as .mov with video/quicktime instead of being
+        // mislabelled .mp4.
+        const upload = await uploadRender(
+          supabase,
+          user.id,
+          projectId,
+          rendered,
+          `.${outExt}`
+        ).catch((err) => {
+          console.warn("[/api/render] upload to storage failed:", err);
+          return null;
+        });
         renderRefPath = upload?.path ?? null;
       } else {
         console.warn(

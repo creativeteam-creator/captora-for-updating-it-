@@ -20,6 +20,7 @@ import { isDesktopMode, getLocalSessionsDir } from "@/lib/captora-mode";
 import { getUserApiKeys } from "@/lib/userApiKeys";
 import { withRequestContext } from "@/lib/requestContext";
 import { reportServerEvent } from "@/lib/telemetry-server";
+import { isValidProjectId, safeMediaExt } from "@/lib/pathSafety";
 
 export const runtime = "nodejs";
 // 30-min cap so long-form content (clinic consultations / training videos up
@@ -141,6 +142,14 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
+    // projectId is concatenated into on-disk paths below. Require a real
+    // UUID so it can't carry a separator or a `..` segment.
+    if (!isValidProjectId(projectId)) {
+      return NextResponse.json(
+        { ok: false, error: "projectId must be a UUID" },
+        { status: 400 }
+      );
+    }
     // Storage RLS already scopes by `<user_id>/...` — double-check here so
     // a logged-in user can't accidentally pass another user's path.
     if (!storagePath.startsWith(`${user.id}/`)) {
@@ -163,11 +172,24 @@ export async function POST(req: NextRequest) {
     const explicitTitle = typeof body.title === "string" ? body.title.trim() : "";
     const thumbnailDataUrl = typeof body.thumbnail === "string" ? body.thumbnail : "";
 
-    const ext = (
-      body.ext && body.ext.startsWith(".")
-        ? body.ext
-        : (extname(fileName) || ".mp3")
-    ).toLowerCase();
+    // Extension goes straight into a filename, so it's allow-listed
+    // rather than merely checked for a leading dot — `"../../evil"`
+    // passes `.startsWith(".")`, which is what the old check did.
+    // Falls back to the uploaded filename's own extension before giving
+    // up, so a client that omits `ext` still works.
+    const ext = safeMediaExt(body.ext) ?? safeMediaExt(extname(fileName));
+    if (!ext) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error:
+            `Unsupported media type "${body.ext ?? extname(fileName) ?? "unknown"}". ` +
+            `Upload a video (mp4, mov, webm, mkv, avi, m4v, 3gp) or audio ` +
+            `(mp3, wav, m4a, aac, ogg, flac, opus, wma) file.`,
+        },
+        { status: 400 }
+      );
+    }
     const mediaKind = AUDIO_EXTS.has(ext) ? "audio" : "video";
     const title = explicitTitle || fileName.replace(/\.[^.]+$/, "") || "Untitled";
     const fileSizeMB = body.fileSize ? (body.fileSize / 1024 / 1024).toFixed(2) : "?";
@@ -204,7 +226,23 @@ export async function POST(req: NextRequest) {
     const reconstructedPath = join(sessionDir(), `${projectId}${ext}`);
     // Prefer the IPC-returned path. Fall back to the reconstructed one
     // if the renderer somehow forgot to send it (defensive).
-    const localPath = body.localFilePath ?? reconstructedPath;
+    //
+    // SECURITY: `localFilePath` is honoured ONLY in desktop mode. It is a
+    // raw absolute path chosen by the client, and in web mode it became
+    // the destination of the Supabase download below — letting any
+    // signed-in user write their uploaded file anywhere the server
+    // process could write, and read back any media file already on the
+    // server as a "transcript". On the desktop build the client and the
+    // server are the same machine and the same user, so trusting it there
+    // grants nothing they don't already have; on a shared web deploy it
+    // grants a great deal. The mode check is the whole difference.
+    const localPath =
+      isDesktopMode() && body.localFilePath ? body.localFilePath : reconstructedPath;
+    if (!isDesktopMode() && body.localFilePath) {
+      console.warn(
+        "[/api/transcribe] ignoring client-supplied localFilePath outside desktop mode"
+      );
+    }
     console.log(
       `[/api/transcribe] localPath=${localPath} reconstructedPath=${reconstructedPath} desktopMode=${isDesktopMode()}`
     );

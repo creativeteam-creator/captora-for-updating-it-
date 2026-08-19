@@ -247,10 +247,17 @@ export default function Home() {
     setPickedFile(null);
     // New project — start with no per-line overrides so old values
     // from a previous project don't bleed in.
+    //
+    // wordSizes and userBreaks were missing from this reset: they were
+    // only ever set by the captions list, never cleared, so per-word size
+    // tweaks and forced line breaks carried over into the next project
+    // the user started in the same session.
     clearEditorHistory();
     setLineAnimations({});
     setLineStyles({});
     setLineOverrides({});
+    setWordSizes({});
+    setUserBreaks(new Set());
     setSelectedLineKey(null);
     // Reflect the upload phase explicitly — for large files (clinic
     // network, slow upstream) this can take many minutes and the old
@@ -386,7 +393,12 @@ export default function Home() {
       setOverrides(saved.styleOverrides);
       setLineAnimations(saved.lineAnimations);
       setEditedWords(saved.whisper.words);
-      setLineStyles({});
+      // Freshly transcribed project — these start empty by definition,
+      // but read them off the record rather than hard-coding {} so this
+      // stays correct if the insert ever seeds them.
+      setLineStyles(saved.lineStyles);
+      setWordSizes(saved.wordSizes);
+      setUserBreaks(new Set(saved.userBreaks));
       setLineOverrides({});
       clearEditorHistory();
       void refreshProjects();
@@ -413,6 +425,36 @@ export default function Home() {
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lineAnimations, status.kind]);
+
+  // Persist the per-line / per-word editor state. Same 400ms debounce as
+  // the two effects around it, so a burst of clicks in the captions list
+  // collapses into one write.
+  //
+  // These three were previously in-memory only — they reached /api/render
+  // at export time but were never written to the row, so closing the
+  // project discarded them. They're batched into a single updateProject
+  // call because they're almost always edited together (pick a template
+  // for a line, nudge a word's size, split the line) and three separate
+  // debounced writes would triple the round-trips for one user action.
+  //
+  // userBreaks is serialised as a sorted array: it's a Set in the editor,
+  // Sets aren't JSON-serialisable, and sorting keeps the stored value
+  // stable so an unchanged selection doesn't look like a change.
+  useEffect(() => {
+    if (status.kind !== "transcribed" && status.kind !== "rendering" && status.kind !== "rendered") {
+      return;
+    }
+    const projectId = status.project.id;
+    const t = setTimeout(() => {
+      void updateProject(projectId, {
+        lineStyles,
+        wordSizes,
+        userBreaks: Array.from(userBreaks).sort((a, b) => a - b),
+      });
+    }, 400);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lineStyles, wordSizes, userBreaks, status.kind]);
 
   // Persist style edits to Supabase whenever the editor changes them.
   // Debounced lightly so rapid slider drags don't fire dozens of writes.
@@ -653,7 +695,14 @@ export default function Home() {
       setOverrides(project.styleOverrides);
       setLineAnimations(project.lineAnimations);
       setEditedWords(project.whisper.words);
-      setLineStyles({});
+      // Restore the per-line / per-word edits. These used to be reset to
+      // empty here, which is why reopening a project silently threw away
+      // every template pick, size tweak and forced line break the user
+      // had made. userBreaks round-trips as an array (a Set isn't
+      // JSON-serialisable) and is rebuilt here.
+      setLineStyles(project.lineStyles);
+      setWordSizes(project.wordSizes);
+      setUserBreaks(new Set(project.userBreaks));
       setLineOverrides({});
       clearEditorHistory();
       setStatus({ kind: "transcribed", project, file });

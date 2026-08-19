@@ -15,6 +15,7 @@
 import { createClient } from "./supabase/client";
 import {
   RENDERS_BUCKET,
+  RENDER_EXTS,
   SOURCE_BUCKET,
   THUMBNAILS_BUCKET,
   signedUrl,
@@ -63,6 +64,16 @@ export interface ProjectRecord {
   /** Per-line entrance-animation overrides (centisecond key → variant
    *  name). Persisted in `projects.line_animations`. */
   lineAnimations: Record<string, string>;
+  /** Per-line template overrides (centisecond key → CaptionStyleId).
+   *  Persisted in `projects.line_styles` (migration 008). */
+  lineStyles: Record<string, CaptionStyleId>;
+  /** Per-word size multipliers (centisecond key → multiplier).
+   *  Persisted in `projects.word_sizes` (migration 008). */
+  wordSizes: Record<string, number>;
+  /** Word indexes after which the grouper forces a new line. Stored as
+   *  an array because the editor holds a Set, which isn't
+   *  JSON-serialisable. Persisted in `projects.user_breaks`. */
+  userBreaks: number[];
 
   // Render
   renderStatus: "idle" | "rendering" | "rendered" | "failed";
@@ -120,6 +131,12 @@ export async function updateProject(
     transcriptText?: string;
     /** Per-line animation overrides — replaces the existing map entirely. */
     lineAnimations?: Record<string, string>;
+    /** Per-line template picks — replaces the existing map entirely. */
+    lineStyles?: Record<string, CaptionStyleId>;
+    /** Per-word size multipliers — replaces the existing map entirely. */
+    wordSizes?: Record<string, number>;
+    /** Forced line-break word indexes — replaces the existing list. */
+    userBreaks?: number[];
   }
 ): Promise<void> {
   const supabase = createClient();
@@ -132,6 +149,9 @@ export async function updateProject(
   if (patch.whisperWords !== undefined) dbPatch.transcript_words = patch.whisperWords;
   if (patch.transcriptText !== undefined) dbPatch.transcript_text = patch.transcriptText;
   if (patch.lineAnimations !== undefined) dbPatch.line_animations = patch.lineAnimations;
+  if (patch.lineStyles !== undefined) dbPatch.line_styles = patch.lineStyles;
+  if (patch.wordSizes !== undefined) dbPatch.word_sizes = patch.wordSizes;
+  if (patch.userBreaks !== undefined) dbPatch.user_breaks = patch.userBreaks;
   if (Object.keys(dbPatch).length === 0) return;
 
   const { error } = await sb.from("projects").update(dbPatch).eq("id", id);
@@ -169,9 +189,16 @@ export async function deleteProject(id: string): Promise<void> {
     if (r.source_thumbnail && !r.source_thumbnail.startsWith("data:")) {
       sb.storage.from(THUMBNAILS_BUCKET).remove([r.source_thumbnail]).catch(() => {});
     }
-    // Render is keyed by `<uid>/<projectId>.mp4` regardless of url.
+    // Renders are keyed by `<uid>/<projectId><ext>`. Remove every
+    // container we can produce rather than assuming .mp4 — a transparent
+    // export is a .mov, and guessing wrong leaves the file orphaned in
+    // the bucket forever, still counting against storage quota. Removing
+    // a key that doesn't exist is a no-op.
     if (r.user_id) {
-      sb.storage.from(RENDERS_BUCKET).remove([`${r.user_id}/${id}.mp4`]).catch(() => {});
+      sb.storage
+        .from(RENDERS_BUCKET)
+        .remove(RENDER_EXTS.map((e) => `${r.user_id}/${id}${e}`))
+        .catch(() => {});
     }
   }
 }
@@ -295,7 +322,7 @@ async function rowToRecord(
     !skipSourceSignedUrl && row.source_path
       ? signedUrl(supabase, SOURCE_BUCKET, row.source_path)
       : Promise.resolve(null),
-    row.render_url ? Promise.resolve(row.render_url) : Promise.resolve(null),
+    resolveRenderUrl(supabase, row.render_url),
   ]);
 
   return {
@@ -328,15 +355,62 @@ async function rowToRecord(
 
     styleId: row.style_id as CaptionStyleId,
     styleOverrides: (row.style_overrides ?? {}) as CaptionStyleOverrides,
-    // Cast — the Supabase type generic doesn't yet include `line_animations`
-    // (column added by migration 004); the runtime shape is correct.
+    // Casts — the Supabase type generic predates these columns
+    // (line_animations from migration 004; the rest from 008). The
+    // runtime shape is correct.
+    //
+    // Each falls back to an empty value, which matters for rows created
+    // before migration 008 ran: those have SQL NULL rather than the
+    // column default, and the editor must open them as "no overrides"
+    // rather than crashing on a null map.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     lineAnimations: (((row as any).line_animations ?? {}) as Record<string, string>),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    lineStyles: (((row as any).line_styles ?? {}) as Record<string, CaptionStyleId>),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    wordSizes: (((row as any).word_sizes ?? {}) as Record<string, number>),
+    userBreaks: Array.isArray((row as unknown as { user_breaks?: unknown }).user_breaks)
+      ? ((row as unknown as { user_breaks: number[] }).user_breaks)
+      : [],
 
     renderStatus: row.render_status,
     renderUrl,
     renderedAt: row.rendered_at ? new Date(row.rendered_at).getTime() : null,
   };
+}
+
+/**
+ * Turn the stored `render_url` into something a browser can actually
+ * open.
+ *
+ * The column holds two different things depending on which mode produced
+ * the render:
+ *   - web mode:     a storage path, `<uid>/<projectId>.mp4`
+ *   - desktop mode: an absolute path on the user's own disk
+ *
+ * It used to be passed through untouched while being typed and documented
+ * as "signed URL for the rendered MP4" — so the web-mode value was a
+ * bucket path masquerading as a URL. Nothing consumed the field yet, so
+ * nothing visibly broke, but the first consumer would have failed
+ * differently in each mode.
+ *
+ * Desktop absolute paths are returned as-is: they're for
+ * `revealInOSFileManager`, not for an <a href>.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function resolveRenderUrl(
+  supabase: any,
+  raw: string | null
+): Promise<string | null> {
+  if (!raw) return null;
+  if (raw.startsWith("http://") || raw.startsWith("https://")) return raw;
+  // Desktop mode writes a local filesystem path. Windows drive letters
+  // ("C:\…") and POSIX absolute paths ("/Users/…") both land here; a
+  // storage key is always "<uuid>/<uuid><ext>" with no leading slash.
+  if (/^[a-zA-Z]:[\\/]/.test(raw) || raw.startsWith("/") || raw.startsWith("\\")) {
+    return raw;
+  }
+  return signedUrl(supabase, RENDERS_BUCKET, raw);
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

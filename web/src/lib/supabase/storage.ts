@@ -26,8 +26,33 @@ type Sb = SupabaseClient<any, any, any>;
 export function sourcePath(userId: string, projectId: string, ext: string): string {
   return `${userId}/${projectId}${normaliseExt(ext)}`;
 }
-export function renderPath(userId: string, projectId: string): string {
-  return `${userId}/${projectId}.mp4`;
+/**
+ * Rendered-output path. Takes the real extension because transparent
+ * exports are ProRes in a `.mov` container, not H.264 in `.mp4`.
+ *
+ * This used to hard-code `.mp4`, so a transparent render was stored under
+ * an .mp4 name with a `video/mp4` content type. Downloading it from
+ * Recent Videos handed the user a ProRes file that most players refuse to
+ * open, for no reason other than the label.
+ *
+ * Defaults to `.mp4` so existing callers and existing rows keep resolving
+ * to the same key they always did.
+ */
+export function renderPath(
+  userId: string,
+  projectId: string,
+  ext: string = ".mp4"
+): string {
+  return `${userId}/${projectId}${normaliseExt(ext)}`;
+}
+
+/** Extensions a render can be written as — used when cleaning up a
+ *  deleted project, where we don't know which one was produced. */
+export const RENDER_EXTS = [".mp4", ".mov"] as const;
+
+/** Content type matching a rendered file's container. */
+export function renderContentType(ext: string): string {
+  return normaliseExt(ext) === ".mov" ? "video/quicktime" : "video/mp4";
 }
 export function thumbnailPath(userId: string, projectId: string): string {
   return `${userId}/${projectId}.jpg`;
@@ -76,9 +101,18 @@ export async function uploadRender(
   supabase: Sb,
   userId: string,
   projectId: string,
-  body: Blob | Buffer
+  body: Blob | Buffer,
+  /** Container the render was actually written as — ".mp4" for H.264,
+   *  ".mov" for transparent ProRes. */
+  ext: string = ".mp4"
 ): Promise<UploadResult> {
-  return uploadBlob(supabase, RENDERS_BUCKET, renderPath(userId, projectId), body, "video/mp4");
+  return uploadBlob(
+    supabase,
+    RENDERS_BUCKET,
+    renderPath(userId, projectId, ext),
+    body,
+    renderContentType(ext)
+  );
 }
 
 export async function uploadThumbnail(

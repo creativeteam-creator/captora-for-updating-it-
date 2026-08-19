@@ -27,13 +27,27 @@ const PUBLIC_PATHS = [
   // gets there, /auth/callback has already exchanged the recovery code
   // for a session, so the standard auth gate works.
   //
-  // Internal server-side API routes — called from the editor JS which
-  // may fire before the Supabase cookie is refreshed (e.g. glossary saves).
-  "/api/glossary",
+  // /api/glossary used to be listed here. It was exempted so the editor's
+  // fetch wouldn't be REDIRECTED to /login and get HTML back — but the
+  // exemption also let unauthenticated callers reach the route, which
+  // falls back to writing a JSON file on the server when there's no user.
+  // The real problem was the redirect, not the gate, and API routes now
+  // get a 401 instead (see below). So nothing needs exempting.
 ];
 
 function isPublicPath(pathname: string): boolean {
   return PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`));
+}
+
+/**
+ * API routes must never be answered with a redirect. A `fetch()` follows
+ * a 302 transparently, so the caller ends up parsing the login page's
+ * HTML as JSON and reports a confusing syntax error instead of "you're
+ * signed out". A 401 says exactly what happened and matches what every
+ * route handler already returns for itself.
+ */
+function isApiPath(pathname: string): boolean {
+  return pathname.startsWith("/api/");
 }
 
 
@@ -82,6 +96,12 @@ export async function updateSession(request: NextRequest) {
     const isPublic = isPublicPath(pathname);
 
     if (!user && !isPublic) {
+      if (isApiPath(pathname)) {
+        return NextResponse.json(
+          { ok: false, error: "Not signed in" },
+          { status: 401 }
+        );
+      }
       // Anonymous → /login, with the original target as `next` so we can
       // bounce them back after sign-in.
       const redirectUrl = request.nextUrl.clone();

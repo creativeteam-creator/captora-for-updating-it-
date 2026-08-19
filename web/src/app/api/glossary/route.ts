@@ -19,6 +19,20 @@ export const runtime = "nodejs";
 
 const LOCAL_GLOSSARY_PATH = join(process.cwd(), "glossary.json");
 
+/**
+ * The local-file fallback is a DEVELOPMENT convenience for working
+ * without a Supabase session. It must never run in production.
+ *
+ * It used to run whenever there was no signed-in user, and this route was
+ * additionally exempted from the middleware auth gate — so on a deployed
+ * instance anyone on the internet could POST here and append entries to a
+ * JSON file on the server, unauthenticated and unbounded. The middleware
+ * exemption is gone (see lib/supabase/middleware.ts) and this flag makes
+ * the file path unreachable in production even if something else ever
+ * routes around the gate.
+ */
+const ALLOW_LOCAL_FALLBACK = process.env.NODE_ENV === "development";
+
 // ── Local JSON fallback (dev only) ──────────────────────────────────────────
 
 async function readLocalGlossary(): Promise<Record<string, string>> {
@@ -73,17 +87,23 @@ async function deleteSupabaseGlossary(userId: string, from: string): Promise<voi
 
 // ── Route handlers ───────────────────────────────────────────────────────────
 
+/** 401 body shared by all three handlers. */
+const UNAUTHORIZED = NextResponse.json(
+  { ok: false, error: "Not signed in" },
+  { status: 401 }
+);
+
 export async function GET() {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
 
-  let entries: Record<string, string>;
   if (user) {
-    entries = await readSupabaseGlossary(user.id);
-  } else {
-    entries = await readLocalGlossary();
+    return NextResponse.json({ entries: await readSupabaseGlossary(user.id) });
   }
-  return NextResponse.json({ entries });
+  if (ALLOW_LOCAL_FALLBACK) {
+    return NextResponse.json({ entries: await readLocalGlossary() });
+  }
+  return UNAUTHORIZED.clone();
 }
 
 export async function POST(req: NextRequest) {
@@ -104,12 +124,14 @@ export async function POST(req: NextRequest) {
     if (user) {
       await upsertSupabaseGlossary(user.id, from, to);
       console.log(`[glossary] supabase saved: "${from}" → "${to}" (user=${user.id.slice(0,8)})`);
-    } else {
+    } else if (ALLOW_LOCAL_FALLBACK) {
       // Dev fallback — save to local JSON
       const entries = await readLocalGlossary();
       entries[from] = to;
       await writeLocalGlossary(entries);
       console.log(`[glossary] local saved: "${from}" → "${to}"`);
+    } else {
+      return UNAUTHORIZED.clone();
     }
 
     return NextResponse.json({ ok: true, from, to });
@@ -132,10 +154,12 @@ export async function DELETE(req: NextRequest) {
 
     if (user) {
       await deleteSupabaseGlossary(user.id, from);
-    } else {
+    } else if (ALLOW_LOCAL_FALLBACK) {
       const entries = await readLocalGlossary();
       delete entries[from];
       await writeLocalGlossary(entries);
+    } else {
+      return UNAUTHORIZED.clone();
     }
 
     return NextResponse.json({ ok: true });
