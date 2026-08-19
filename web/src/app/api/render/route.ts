@@ -15,6 +15,7 @@ import {
 } from "@/lib/supabase/storage";
 import { downloadToFile } from "@/lib/supabase/storage-server";
 import { isDesktopMode, getLocalRendersDir, getLocalSessionsDir } from "@/lib/captora-mode";
+import { reportServerEvent } from "@/lib/telemetry-server";
 
 export const runtime = "nodejs";
 // Renders involve bundling (~10–30s first call), Chromium boot, and
@@ -516,6 +517,27 @@ export async function POST(req: NextRequest) {
     // Best-effort: mark the project failed so the editor can surface it.
     try {
       const body = (await req.clone().json().catch(() => ({}))) as RenderBody;
+
+      // Report the failure so export breakage shows up in the dashboard
+      // instead of only in this user's local console. Fire-and-forget —
+      // the user's error response must not wait on it. Only structural
+      // facts go into context: no words, no style objects, no paths.
+      void reportServerEvent({
+        event: "render.failed",
+        message,
+        stack: err instanceof Error ? err.stack : undefined,
+        context: {
+          projectId: body.projectId,
+          style: body.style,
+          transparent: !!body.transparent,
+          durationSec: body.durationSec,
+          wordCount: Array.isArray(body.words) ? body.words.length : 0,
+          width: body.width,
+          height: body.height,
+          desktopMode: isDesktopMode(),
+        },
+      });
+
       if (body.projectId) {
         const supabase = await createClient();
         // eslint-disable-next-line @typescript-eslint/no-explicit-any

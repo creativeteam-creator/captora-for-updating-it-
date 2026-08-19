@@ -1,6 +1,6 @@
 {
   "name": "captora",
-  "version": "1.0.71",
+  "version": "1.0.72",
   "private": true,
   "description": "Captora — viral-style auto-captions. Web app + Remotion renderer + Electron desktop wrapper.",
   "main": "electron/dist/main.js",
@@ -21,10 +21,11 @@
     "build:remotion": "npm --workspace remotion run build",
     "build:electron": "npm --workspace electron run build",
     "build:all": "npm run build:web && npm run build:electron",
-    "dist": "npm run build:all && electron-builder",
-    "dist:win": "npm run build:all && electron-builder --win",
-    "dist:mac": "npm run build:all && electron-builder --mac",
-    "release": "npm run build:all && electron-builder --publish always",
+    "dist": "npm run build:all && electron-builder --config electron-builder.config.js",
+    "dist:win": "npm run build:all && electron-builder --win --config electron-builder.config.js",
+    "dist:mac": "npm run build:all && electron-builder --mac --config electron-builder.config.js",
+    "dist:linux": "npm run build:all && electron-builder --linux --config electron-builder.config.js",
+    "release": "npm run build:all && electron-builder --publish always --config electron-builder.config.js",
     "icons": "node scripts/build-icons.js",
     "render": "npm --workspace remotion run render"
   },
@@ -38,93 +39,7 @@
     "png2icons": "^2.0.1",
     "wait-on": "^8.0.1"
   },
-  "build": {
-    "appId": "com.qhtclinic.captora",
-    "productName": "Captora",
-    "copyright": "© 2025 QHT Clinic",
-    "directories": {
-      "output": "dist-electron",
-      "buildResources": "resources"
-    },
-    "files": [
-      "electron/dist/**/*",
-      "electron/package.json",
-      "!**/node_modules/**/{CHANGELOG.md,README.md,readme.md,*.d.ts.map,*.js.map}",
-      "!**/node_modules/**/{test,tests,__tests__,powered-test,example,examples}",
-      "!**/node_modules/.cache"
-    ],
-    "extraResources": [
-      {
-        "from": "web/.next/standalone",
-        "to": "web/.next/standalone"
-      },
-      {
-        "from": "web/.next/static",
-        "to": "web/.next/standalone/web/.next/static"
-      },
-      {
-        "from": "web/.env.production",
-        "to": "web/.env.production"
-      },
-      {
-        "from": "scripts",
-        "to": "scripts"
-      }
-    ],
-    "win": {
-      "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64"
-          ]
-        }
-      ],
-      "icon": "resources/icon.ico",
-      "publisherName": "QHT Clinic"
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "perMachine": false,
-      "deleteAppDataOnUninstall": false
-    },
-    "mac": {
-      "target": [
-        {
-          "target": "dmg",
-          "arch": [
-            "arm64",
-            "x64"
-          ]
-        },
-        {
-          "target": "zip",
-          "arch": [
-            "arm64",
-            "x64"
-          ]
-        }
-      ],
-      "icon": "resources/icon.icns",
-      "category": "public.app-category.video",
-      "identity": null,
-      "gatekeeperAssess": false,
-      "hardenedRuntime": false,
-      "type": "distribution"
-    },
-    "dmg": {
-      "writeUpdateInfo": true,
-      "sign": false
-    },
-    "publish": {
-      "provider": "github",
-      "owner": "creativeteam-creator",
-      "repo": "captora-for-updating-it-",
-      "private": false,
-      "releaseType": "release"
-    }
-  },
+  "//build": "electron-builder config lives in electron-builder.config.js — it branches on signing env vars, which a static JSON block can't do.",
   "engines": {
     "node": ">=20"
   }

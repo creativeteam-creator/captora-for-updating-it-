@@ -2,17 +2,33 @@
 #
 # Triggers on tag push:    git tag v1.0.1 && git push --tags
 # Outputs to GitHub Releases (which electron-updater polls):
-#   - Captora-Setup-X.Y.Z.exe        (Windows NSIS)
+#   - Captora-Setup-X.Y.Z.exe        (Windows NSIS, x64)
 #   - Captora-X.Y.Z-arm64.dmg        (Apple Silicon)
 #   - Captora-X.Y.Z-x64.dmg          (Intel Mac)
-#   - latest.yml + latest-mac.yml    (update manifests)
+#   - Captora-X.Y.Z.AppImage         (Linux x64, portable + auto-updatable)
+#   - captora_X.Y.Z_amd64.deb        (Debian / Ubuntu)
+#   - latest.yml / latest-mac.yml / latest-linux.yml  (update manifests)
 #
-# Free tier covers ~200 releases/month for private repos, unlimited for
-# public. Mac builds run on macos-latest (arm64); Windows on
-# windows-latest (x64). No paid signing certs required for the free
-# ad-hoc Mac path; if you ever buy an Apple Developer cert, drop the
-# CSC_LINK + APPLE_ID secrets into the repo and they'll be picked up
-# automatically by electron-builder.
+# No Windows ARM64 target, deliberately: Remotion 4.0.x publishes no
+# `@remotion/compositor-win32-arm64`, so a native ARM64 build would
+# install fine and then fail at export. Windows 11 on ARM runs the x64
+# build (and its x64 compositor) under emulation, so those users are
+# already covered by the same installer.
+#
+# ── Code signing ────────────────────────────────────────────────────────
+# All three platforms build unsigned by default. electron-builder.config.js
+# turns real signing + notarization on BY ITSELF as soon as the relevant
+# secrets exist — the env block in the build step below is already wired,
+# so the only action needed is adding the secrets:
+#
+#   macOS:    CSC_LINK, CSC_KEY_PASSWORD, APPLE_ID,
+#             APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID
+#   Windows:  WIN_CSC_LINK + WIN_CSC_KEY_PASSWORD  (traditional .pfx)
+#             — or — AZURE_TRUSTED_SIGNING_* + AZURE_CLIENT_* (cheaper)
+#
+# Adding them also flips `captoraSigned: true` inside the packaged app,
+# which makes electron/src/autoUpdate.ts stop bypassing signature
+# verification and switch Mac to the seamless Squirrel.Mac update flow.
 
 name: Release
 
@@ -34,6 +50,8 @@ jobs:
             target: win
           - os: macos-latest
             target: mac
+          - os: ubuntu-latest
+            target: linux
 
     runs-on: ${{ matrix.os }}
 
@@ -64,6 +82,42 @@ jobs:
         # on export.
         if: runner.os == 'macOS'
         run: npm install @remotion/compositor-darwin-x64 --no-save --no-audit --no-fund --force
+
+      - name: Install Linux packaging + runtime dependencies
+        # - libarchive-tools / fakeroot: electron-builder needs these to
+        #   assemble the .deb. AppImage alone would build without them,
+        #   but the .deb target fails with an opaque error.
+        # - libgbm / libasound / libnss3 etc: the headless Chromium that
+        #   Remotion drives at render time links against these. They are
+        #   NOT bundled by electron-builder, so without them the Linux
+        #   build packages cleanly and then dies on the user's first
+        #   export. Installing them here doesn't put them in the
+        #   artifact — it only proves the build itself works — so the
+        #   .deb declares them as dependencies via electron-builder's
+        #   default Electron dependency set.
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            fakeroot libarchive-tools rpm \
+            libgbm1 libasound2t64 libnss3 libatk-bridge2.0-0 libgtk-3-0
+
+      - name: Verify Linux Remotion compositor is present
+        # The Linux compositor is an optionalDependency of
+        # @remotion/renderer resolved by platform. If npm skipped it, the
+        # build would still succeed and then fail at the user's first
+        # export with a missing-binary error — the exact class of bug the
+        # Mac x64 step above exists to prevent. Fail loudly here instead.
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          if [ ! -d node_modules/@remotion/compositor-linux-x64-gnu ]; then
+            echo "::error::@remotion/compositor-linux-x64-gnu is missing — the Linux build would ship without a working renderer."
+            ls node_modules/@remotion || true
+            exit 1
+          fi
+          echo "Linux compositor present:"
+          ls node_modules/@remotion/compositor-linux-x64-gnu
 
       - name: Validate required secrets
         # Fails the build EARLY if any required secret is missing or
@@ -290,17 +344,45 @@ jobs:
         env:
           # `GH_TOKEN` is what electron-builder's GitHub publisher reads.
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Optional Apple signing — only used when these are set in repo secrets.
-          # Without them, Mac builds use ad-hoc signing (free path).
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+          # ── Apple signing + notarization (all optional) ──────────────
+          # Every one of these is empty until the certs are bought.
+          # electron-builder.config.js checks for them and keeps the
+          # ad-hoc unsigned path when they're absent — nothing here
+          # fails on a missing secret.
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          # electron-builder's notarytool integration reads exactly this
+          # variable name. The older APPLE_ID_PASSWORD is passed too so a
+          # secret already stored under that name keeps working.
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD || secrets.APPLE_ID_PASSWORD }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+          # ── Windows signing, option (a): traditional .pfx ────────────
+          # Kept separate from CSC_LINK so a Mac cert can never be picked
+          # up by the Windows job (and vice versa).
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+
+          # ── Windows signing, option (b): Azure Trusted Signing ───────
+          # Cheapest route to a trusted Authenticode signature (~$10/mo,
+          # no EV hardware token). Set all six to enable.
+          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          AZURE_TRUSTED_SIGNING_ACCOUNT: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT }}
+          AZURE_TRUSTED_SIGNING_PROFILE: ${{ secrets.AZURE_TRUSTED_SIGNING_PROFILE }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
         # Compile electron's TS, then run electron-builder with explicit
         # `--publish always` so the GitHub publisher uploads the assets.
         # We skipped `npm run release` because that re-runs build:web
         # AFTER our pre-stage step, which would wipe the staged files.
+        #
+        # `--config` is explicit rather than relying on auto-discovery, so
+        # a stray electron-builder.yml appearing later can't silently take
+        # over the release build.
         run: |
           npm run build:electron
-          npx electron-builder --publish always
+          npx electron-builder --publish always --config electron-builder.config.js

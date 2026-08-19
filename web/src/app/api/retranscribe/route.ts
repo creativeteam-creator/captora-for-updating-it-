@@ -12,6 +12,7 @@ import { downloadToFile } from "@/lib/supabase/storage-server";
 import { isDesktopMode, getLocalSessionsDir } from "@/lib/captora-mode";
 import { getUserApiKeys } from "@/lib/userApiKeys";
 import { withRequestContext } from "@/lib/requestContext";
+import { reportServerEvent } from "@/lib/telemetry-server";
 
 /**
  * Re-transcribe an existing project. Same pipeline as /api/transcribe
@@ -251,6 +252,12 @@ export async function POST(req: NextRequest) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[/api/retranscribe] failed:", message);
     if (err instanceof Error && err.stack) console.error(err.stack);
+    void reportServerEvent({
+      event: "retranscribe.failed",
+      message,
+      stack: err instanceof Error ? err.stack : undefined,
+      context: { desktopMode: isDesktopMode() },
+    });
     return NextResponse.json({ ok: false, error: message }, { status: 500 });
   }
 }

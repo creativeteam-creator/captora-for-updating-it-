@@ -26,6 +26,7 @@ import { existsSync, appendFileSync, createWriteStream } from "fs";
 import { join } from "path";
 import { app } from "electron";
 import { capabilitiesToEnv, loadOrDetectCapabilities } from "./capabilities";
+import { recordEvent } from "./eventSpool";
 
 /**
  * Synchronous one-shot log line. Used for the diagnostic startup
@@ -72,6 +73,11 @@ async function loadEnvFile(path: string): Promise<Record<string, string>> {
 const isDev = process.env.NODE_ENV === "development";
 
 let serverProcess: ChildProcess | null = null;
+
+/** Set by stopNextServer() so the exit handler can tell a clean shutdown
+ *  apart from a crash. Without it, every normal app quit would be
+ *  reported as a server crash. */
+let stoppingIntentionally = false;
 
 interface ServerInfo {
   port: number;
@@ -222,12 +228,31 @@ export async function startNextServer(): Promise<ServerInfo> {
     });
   });
 
+  // Past this point the server is up. If it dies LATER — OOM during a
+  // 4K render, a crash inside Remotion, the OS killing it — the window
+  // stays open showing a page that can no longer reach its backend, and
+  // every subsequent action fails with an opaque network error. That
+  // looked identical to "the app is broken" from the user's side and
+  // left no trace anywhere we could see.
+  //
+  // `stoppingIntentionally` keeps a normal app quit from being reported
+  // as a crash.
+  serverProcess.on("exit", (code, signal) => {
+    if (stoppingIntentionally) return;
+    const detail = `Embedded Next.js server exited unexpectedly (code=${code} signal=${signal})`;
+    logSync(`[nextServer] ${detail}\n`);
+    recordEvent("main.next-server-exited", detail, {
+      context: { code, signal, port, phase: "running" },
+    });
+  });
+
   return { port, url: `http://127.0.0.1:${port}` };
 }
 
 /** Kill the embedded Next.js server. Called on app quit so the process
  *  doesn't linger after the window closes. */
 export function stopNextServer(): void {
+  stoppingIntentionally = true;
   if (serverProcess && !serverProcess.killed) {
     serverProcess.kill();
     serverProcess = null;

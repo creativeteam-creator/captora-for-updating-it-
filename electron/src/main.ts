@@ -26,6 +26,35 @@ import { join } from "path";
 import { startNextServer, stopNextServer } from "./nextServer";
 import { startTempCleanup } from "./tempCleanup";
 import { setupAutoUpdate } from "./autoUpdate";
+import { drainEvents, recordEvent } from "./eventSpool";
+
+// ──────────────────────────────────────────────────────────────
+// Crash capture — registered before anything else can throw.
+//
+// These are the failures that used to vanish completely: the app dies or
+// goes white, the user reopens it, and the only trace is a line in a log
+// file on their own disk. recordEvent() writes them to a spool that the
+// renderer uploads on its next successful boot (see eventSpool.ts).
+//
+// Registered at module scope, not inside createWindow(), so a crash
+// during startup — the ones users report as "it just doesn't open" — is
+// still captured.
+// ──────────────────────────────────────────────────────────────
+
+process.on("uncaughtException", (err) => {
+  recordEvent("main.uncaught-exception", err?.message ?? String(err), {
+    stack: err?.stack,
+  });
+  // Deliberately not re-thrown or exited: Electron's default behaviour
+  // for an uncaught exception in main is to show a dialog and keep
+  // running. Preserving that is better than turning a recoverable error
+  // into a hard quit, and the event is on disk either way.
+});
+
+process.on("unhandledRejection", (reason) => {
+  const err = reason instanceof Error ? reason : new Error(String(reason));
+  recordEvent("main.unhandled-rejection", err.message, { stack: err.stack });
+});
 
 // ──────────────────────────────────────────────────────────────
 // Single-instance lock — prevent two Captoras running at once
@@ -55,6 +84,12 @@ async function createWindow(): Promise<void> {
     serverUrl = info.url;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    // The single most user-visible failure mode: app opens, shows an
+    // error box, quits. Nobody could see how often this happens.
+    recordEvent("main.next-server-exited", msg, {
+      stack: err instanceof Error ? err.stack : undefined,
+      context: { phase: "startup" },
+    });
     dialog.showErrorBox(
       "Captora failed to start",
       `Could not boot the embedded server:\n\n${msg}\n\nPlease reinstall Captora.`
@@ -116,6 +151,18 @@ async function createWindow(): Promise<void> {
     mainWindow = null;
   });
 
+  // Renderer crash — the "app went white / blank" reports. `reason` is
+  // 'crashed' | 'oom' | 'killed' | … ; 'oom' in particular is the
+  // signature of the bytes-IPC upload path chewing through memory on a
+  // multi-GB source file, which is worth knowing about specifically.
+  mainWindow.webContents.on("render-process-gone", (_e, details) => {
+    recordEvent(
+      "main.renderer-gone",
+      `Renderer process gone: ${details.reason}`,
+      { context: { reason: details.reason, exitCode: details.exitCode } }
+    );
+  });
+
   // 3. Load the embedded UI
   await mainWindow.loadURL(serverUrl);
 
@@ -145,6 +192,21 @@ ipcMain.handle("captora:pickMediaFile", async () => {
 
 ipcMain.handle("captora:revealInOSFileManager", async (_e, path: string) => {
   shell.showItemInFolder(path);
+});
+
+/**
+ * Hand the renderer every crash the main process spooled while it had no
+ * Supabase session, and clear the spool. The renderer uploads them to
+ * `public.app_events` once the user is signed in.
+ *
+ * Returns [] when there's nothing pending, which is the common case.
+ */
+ipcMain.handle("captora:drainEvents", async () => {
+  const events = drainEvents();
+  if (events.length > 0) {
+    ipcLog(`drainEvents returning ${events.length} spooled event(s) to renderer`);
+  }
+  return events;
 });
 
 /**

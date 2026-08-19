@@ -1,5 +1,14 @@
+// Single source of truth for the app version: the root package.json that
+// electron-builder also reads. Inlined into the client bundle below so
+// crash reports say which build they came from — a report you can't tie
+// to a version tells you a bug exists but not whether you already fixed it.
+const APP_VERSION = require("../package.json").version;
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  env: {
+    NEXT_PUBLIC_APP_VERSION: APP_VERSION,
+  },
   // `output: "standalone"` produces a self-contained `.next/standalone/`
   // folder with `server.js` + the minimal `node_modules` Next needs to
   // run. The Electron main process spawns this exact `server.js` to

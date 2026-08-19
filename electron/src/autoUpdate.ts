@@ -12,6 +12,27 @@
  *   3. When ready, prompt user — they choose when to restart
  *   4. On restart, the new binary takes over
  *
+ * ── Signed vs unsigned builds ───────────────────────────────────────────
+ *
+ * This module runs one of TWO strategies, chosen at runtime by
+ * `isSignedBuild()` (see buildInfo.ts — the flag is baked in by
+ * electron-builder.config.js when signing secrets are present):
+ *
+ *   SIGNED (cert in CI):
+ *     - Windows: electron-updater's Authenticode verification stays ON.
+ *     - Mac: the normal Squirrel.Mac download-and-swap flow works, so
+ *       both platforms get the same seamless "Restart now" experience.
+ *     This is the path we WANT. It turns on by itself the moment the
+ *     certificates land in the repo secrets — no code change here.
+ *
+ *   UNSIGNED (today):
+ *     - Windows: signature verification is bypassed, because there is no
+ *       signature to verify and electron-updater would otherwise refuse
+ *       the install. HTTPS-to-our-own-GitHub-release is the trust anchor.
+ *     - Mac: Squirrel.Mac rejects the swap (ad-hoc signatures use a fresh
+ *       random cert per build), so we degrade to a popup that opens the
+ *       .dmg in the browser for a manual drag-install.
+ *
  * Free Mac path: post-update we strip the `com.apple.quarantine`
  * extended attribute on the new .app bundle so Gatekeeper doesn't
  * block the next launch with "developer cannot be verified". Without
@@ -26,6 +47,8 @@ import { autoUpdater } from "electron-updater";
 import { exec } from "child_process";
 import { appendFileSync } from "fs";
 import { join } from "path";
+import { isSignedBuild } from "./buildInfo";
+import { recordEvent } from "./eventSpool";
 
 const GITHUB_RELEASE_BASE =
   "https://github.com/creativeteam-creator/captora-for-updating-it-/releases/download";
@@ -59,40 +82,48 @@ export function setupAutoUpdate(getMainWindow: () => BrowserWindow | null): void
     return;
   }
 
+  // Is this build carrying a real certificate? Decides which of the two
+  // strategies documented at the top of this file we run.
+  const signedBuild = isSignedBuild();
+
   // Match electron-builder's defaults — pulls the publish config from
   // the packaged app's app-update.yml
   autoUpdater.autoDownload = true;       // background download
   autoUpdater.autoInstallOnAppQuit = true;
 
-  // ── Mac-specific: degrade to popup-and-download ───────────────────────
+  // ── Mac: unsigned builds degrade to popup-and-download ────────────────
   // Squirrel.Mac (electron-updater's Mac install backend) verifies the
   // downloaded .app's code signature against the running app's signature
-  // before swap. Our ad-hoc-signed builds use a fresh random certificate
-  // per build (no $99/year Apple Developer cert), so the swap is rejected:
+  // before swap. Ad-hoc-signed builds use a fresh random certificate per
+  // build (no $99/year Apple Developer cert), so the swap is rejected:
   //   "Code signature at URL ... did not pass validation: code has no
   //    resources but signature indicates they must be present"
   // The download succeeds but the install silently fails — user clicks
   // "Restart" and ends up on the same old version.
   //
-  // Workaround: skip Squirrel.Mac entirely. When an update is available
-  // on Mac, show a popup that opens the GitHub release .dmg URL in the
-  // user's browser. They drag-drop install. Less seamless than Windows
-  // but 100% reliable until we ship a properly-signed-and-notarized
-  // build.
-  if (process.platform === "darwin") {
+  // Workaround: skip Squirrel.Mac entirely and open the .dmg in the
+  // browser for a manual drag-install. Less seamless, 100% reliable.
+  //
+  // A SIGNED build skips this branch entirely and gets the same
+  // download-and-restart flow Windows has always had.
+  if (process.platform === "darwin" && !signedBuild) {
     autoUpdater.autoDownload = false;       // download wastes bandwidth if install will fail
     autoUpdater.autoInstallOnAppQuit = false;
   }
 
-  // Skip Windows code-signing verification. We ship ad-hoc-signed builds
-  // (no $300/year EV cert), so the new installer's Authenticode signature
-  // is null and electron-updater's default verifier refuses to install
-  // it ("New version X.Y.Z is not signed by the application owner").
-  // The download itself is fetched over HTTPS straight from our own
-  // GitHub release — that's the trust anchor here, not a cert chain.
-  // Also enable disableWebInstaller per the upstream warning so this
-  // path keeps working when electron-updater changes the default in a
-  // future release.
+  // ── Windows: unsigned builds bypass Authenticode verification ─────────
+  // An ad-hoc build's installer has a null Authenticode signature, and
+  // electron-updater's default verifier refuses to install it ("New
+  // version X.Y.Z is not signed by the application owner"). HTTPS
+  // straight from our own GitHub release is the trust anchor instead of
+  // a cert chain.
+  //
+  // Once a certificate is in place this bypass is actively harmful — it
+  // would discard the tamper-detection the cert was bought for — so it's
+  // gated on `!signedBuild` and disappears automatically.
+  //
+  // `disableWebInstaller` is set in both cases per the upstream warning,
+  // so this path keeps working when electron-updater changes the default.
   type NsisUpdaterOverrides = {
     disableWebInstaller?: boolean;
     verifyUpdateCodeSignature?: (
@@ -102,8 +133,10 @@ export function setupAutoUpdate(getMainWindow: () => BrowserWindow | null): void
   };
   const win32Updater = autoUpdater as unknown as NsisUpdaterOverrides;
   if (process.platform === "win32") {
-    win32Updater.verifyUpdateCodeSignature = async () => null;
     win32Updater.disableWebInstaller = true;
+    if (!signedBuild) {
+      win32Updater.verifyUpdateCodeSignature = async () => null;
+    }
   }
 
   // Pipe electron-updater's own internal log through our log file too —
@@ -122,29 +155,53 @@ export function setupAutoUpdate(getMainWindow: () => BrowserWindow | null): void
   };
   (autoUpdater as unknown as { logger: ElectronUpdaterLogger }).logger = updaterLogger;
 
-  logLine(`[autoUpdate] setup — currentVersion=${app.getVersion()} feedURL=github`);
+  logLine(
+    `[autoUpdate] setup — currentVersion=${app.getVersion()} feedURL=github ` +
+      `signedBuild=${signedBuild} strategy=${
+        signedBuild
+          ? "native (verified download + restart)"
+          : process.platform === "darwin"
+            ? "mac-manual-dmg"
+            : "win-unverified-nsis"
+      }`
+  );
 
   autoUpdater.on("checking-for-update", () => {
     logLine("[autoUpdate] checking…");
   });
 
+  // The manual-DMG popup fires on every check, and we re-check every 4
+  // hours. Without this guard a user who clicks "Later" gets nagged all
+  // day about the same version. Remember what we've already offered.
+  let macPromptedVersion: string | null = null;
+
   autoUpdater.on("update-available", async (info) => {
     logLine(`[autoUpdate] update available: v${info.version}`);
 
-    // Mac: show a popup that opens the .dmg URL in the user's browser
-    // instead of trying to install via Squirrel.Mac (which fails on our
-    // ad-hoc signatures — see the autoDownload=false block above).
-    if (process.platform === "darwin") {
+    // Signed Mac builds fall through to the normal download →
+    // "update-downloaded" → restart flow. Only the unsigned path needs
+    // the manual browser download.
+    if (process.platform === "darwin" && !signedBuild) {
+      if (macPromptedVersion === info.version) {
+        logLine(`[autoUpdate] already prompted for v${info.version} this session — skipping`);
+        return;
+      }
       const win = getMainWindow();
       if (!win) return;
+      macPromptedVersion = info.version;
       const result = await dialog.showMessageBox(win, {
         type: "info",
         buttons: ["Download", "Later"],
         defaultId: 0,
+        cancelId: 1,
         title: "Captora update available",
         message: `Captora ${info.version} is available.`,
         detail:
-          "Click Download to open the .dmg in your browser. Mount it, drag the new Captora into Applications, and replace the existing copy. Your work is saved.",
+          "Click Download to open the .dmg in your browser.\n\n" +
+          "1. Open the downloaded .dmg\n" +
+          "2. Drag Captora into Applications, replacing the existing copy\n" +
+          "3. Quit and reopen Captora\n\n" +
+          "Your projects and settings are saved and carry over automatically.",
       });
       if (result.response !== 0) return;
       // Pick the right .dmg for this user's CPU. Apple Silicon Macs
@@ -165,6 +222,14 @@ export function setupAutoUpdate(getMainWindow: () => BrowserWindow | null): void
 
   autoUpdater.on("error", (err) => {
     logLine(`[autoUpdate] error: ${err.message}`);
+    // A broken updater is invisible today — it logs to a file nobody
+    // reads and users just quietly stop receiving releases. Spool it so
+    // it reaches the dashboard.
+    recordEvent("update.failed", err.message, {
+      level: "error",
+      stack: err.stack,
+      context: { signedBuild, currentVersion: app.getVersion() },
+    });
   });
 
   autoUpdater.on("download-progress", (p) => {
@@ -179,7 +244,7 @@ export function setupAutoUpdate(getMainWindow: () => BrowserWindow | null): void
     // matters for the free ad-hoc-signed path; signed-and-notarized
     // builds don't need this. Best-effort — failure just means the
     // user sees the prompt once.
-    if (process.platform === "darwin") {
+    if (process.platform === "darwin" && !signedBuild) {
       const appPath = app.getAppPath().replace(/\/Contents\/.*$/, "");
       try {
         await new Promise<void>((resolve) => {

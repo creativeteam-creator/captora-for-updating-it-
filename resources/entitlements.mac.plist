@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hardened-runtime entitlements for signed + notarized macOS builds.
+
+  Only used when CSC_LINK is present (see electron-builder.config.js) —
+  the unsigned ad-hoc path never turns the hardened runtime on, so this
+  file is inert for today's builds.
+
+  Why each one is needed:
+
+    allow-jit / allow-unsigned-executable-memory / disable-library-validation
+      Chromium's V8 JIT-compiles JavaScript and Electron loads unsigned
+      native modules. The hardened runtime blocks all three by default and
+      the app crashes on launch without these. Every notarized Electron
+      app carries them.
+
+    allow-dyld-environment-variables
+      Electron sets DYLD_* when spawning helper processes — including the
+      Next.js server child that Captora boots at startup.
+
+    files.user-selected.read-write
+      The native "Select a video or audio file" dialog. Without it the
+      picker returns a path the app can't actually open.
+
+    files.downloads.read-write
+      Rendered MP4/MOV files land in the user's chosen output folder,
+      which is Downloads for most people.
+
+    audio-input  (present but harmless)
+      Reserved for the planned in-app recording feature. Remove this line
+      if you'd rather not have the microphone prompt appear at all.
+-->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+  <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+  <true/>
+  <key>com.apple.security.files.user-selected.read-write</key>
+  <true/>
+  <key>com.apple.security.files.downloads.read-write</key>
+  <true/>
+  <key>com.apple.security.device.audio-input</key>
+  <true/>
+</dict>
+</plist>

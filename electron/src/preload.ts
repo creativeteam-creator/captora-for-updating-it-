@@ -73,6 +73,14 @@ contextBridge.exposeInMainWorld("captora", {
   ): Promise<ArrayBuffer> =>
     ipcRenderer.invoke("captora:readSourceFile", { projectId, ext }),
 
+  /** Collect crash reports the main process spooled to disk while it
+   *  had no Supabase session (startup failures, main-process
+   *  exceptions, renderer crashes, embedded-server deaths) and clear
+   *  the spool. The renderer uploads them to `public.app_events` once
+   *  the user is signed in. Returns [] when nothing is pending. */
+  drainEvents: (): Promise<unknown[]> =>
+    ipcRenderer.invoke("captora:drainEvents"),
+
   /** Tells the renderer it's running inside the desktop wrapper —
    *  flips small UI bits (e.g. show "Open output folder" instead
    *  of "Download" after render). */

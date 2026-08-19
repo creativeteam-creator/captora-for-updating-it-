@@ -34,6 +34,10 @@ interface CaptoraBridge {
     projectId: string,
     ext: string
   ) => Promise<ArrayBuffer>;
+  /** Drain crash reports the Electron main process spooled to disk.
+   *  Optional — older installed builds don't expose it, and the app
+   *  must keep working when a user is a few versions behind. */
+  drainEvents?: () => Promise<unknown[]>;
   isDesktop: true;
 }
 
@@ -152,4 +156,24 @@ export async function readSourceFileLocally(
   }
   const buffer = await bridge.readSourceFile(projectId, ext);
   return new File([buffer], filename, { type: mimeType || "" });
+}
+
+/**
+ * Collect crash reports the desktop shell spooled while it had no
+ * Supabase session, and hand them to the caller for upload.
+ *
+ * Returns [] in pure web mode and on installed builds predating the
+ * `drainEvents` IPC — both are normal, not error conditions, so this
+ * never throws. The caller pairs it with `flushSpooledEvents()` from
+ * lib/telemetry.
+ */
+export async function drainDesktopEvents(): Promise<unknown[]> {
+  const bridge = getBridge();
+  if (!bridge?.drainEvents) return [];
+  try {
+    return await bridge.drainEvents();
+  } catch (err) {
+    console.warn("[drainDesktopEvents] failed:", err);
+    return [];
+  }
 }

@@ -19,6 +19,7 @@ import { downloadToFile } from "@/lib/supabase/storage-server";
 import { isDesktopMode, getLocalSessionsDir } from "@/lib/captora-mode";
 import { getUserApiKeys } from "@/lib/userApiKeys";
 import { withRequestContext } from "@/lib/requestContext";
+import { reportServerEvent } from "@/lib/telemetry-server";
 
 export const runtime = "nodejs";
 // 30-min cap so long-form content (clinic consultations / training videos up
@@ -84,6 +85,13 @@ async function cleanupOldTempFiles(maxAgeMs = 48 * 60 * 60 * 1000): Promise<void
 export async function POST(req: NextRequest) {
   // Fire cleanup in the background — doesn't block the response.
   void cleanupOldTempFiles();
+
+  // Diagnostic breadcrumbs for crash reporting. Declared out here so the
+  // catch block can see them — the request body is parsed inside the try
+  // and would otherwise be out of scope exactly when we need it most.
+  // Filled in progressively, so a failure reports everything known up to
+  // the point it broke.
+  const diag: Record<string, unknown> = {};
 
   try {
     // ───── Auth gate ─────
@@ -163,6 +171,18 @@ export async function POST(req: NextRequest) {
     const mediaKind = AUDIO_EXTS.has(ext) ? "audio" : "video";
     const title = explicitTitle || fileName.replace(/\.[^.]+$/, "") || "Untitled";
     const fileSizeMB = body.fileSize ? (body.fileSize / 1024 / 1024).toFixed(2) : "?";
+
+    Object.assign(diag, {
+      projectId,
+      ext,
+      mediaKind,
+      spokenLanguage,
+      writingScript,
+      translateToEnglish,
+      accuracy,
+      fileSizeBytes: body.fileSize ?? null,
+      desktopMode: isDesktopMode(),
+    });
 
     console.log(
       `[/api/transcribe] user=${user.id} file=${fileName} size=${fileSizeMB}MB spoken=${spokenLanguage} script=${writingScript} translate=${translateToEnglish} accuracy=${accuracy} storagePath=${storagePath}`
@@ -357,6 +377,15 @@ export async function POST(req: NextRequest) {
         : 500;
     console.error("[/api/transcribe] failed:", message, cause ?? "");
     if (err instanceof Error && err.stack) console.error(err.stack);
+    // A transcription failure means the whole provider chain (ElevenLabs
+    // → Shunya → faster-whisper → Sarvam → Groq → local) was exhausted.
+    // That's exactly the class of failure that used to be invisible.
+    void reportServerEvent({
+      event: "transcribe.failed",
+      message,
+      stack: err instanceof Error ? err.stack : undefined,
+      context: { ...diag, status, cause: cause ? String(cause).slice(0, 500) : undefined },
+    });
     return NextResponse.json({ ok: false, error: message }, { status });
   }
 }
