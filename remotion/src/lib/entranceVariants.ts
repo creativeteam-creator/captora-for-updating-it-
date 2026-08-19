@@ -36,9 +36,14 @@ export function pickVariant(phraseIndex: number): EntranceVariant {
  * where words appear one by one with their own animation.
  *
  * Distinct from `EntranceVariant` (phrase-level) because the parameter
- * shapes differ: word entrances are FAST (3-6 frames) since they fire
+ * shapes differ: word entrances are FAST (~0.10–0.20s) since they fire
  * mid-phrase and shouldn't compete with the active-word highlight,
- * whereas phrase entrances run 6-12 frames.
+ * whereas phrase entrances run ~0.20–0.40s.
+ *
+ * Stated in seconds, not frames. Renders adopt the source video's frame
+ * rate, so a duration in frames would mean a different real duration on
+ * 24fps vs 60fps footage — every timing in these components is derived
+ * as `seconds * fps` for exactly that reason.
  */
 export type WordEntranceVariant =
   | "none"        // Appear with the phrase — current default behaviour.

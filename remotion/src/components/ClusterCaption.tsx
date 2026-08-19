@@ -88,9 +88,22 @@ export function ClusterCaption({
 
   const rng = makeRng(phraseStartSec + phraseIndex);
 
+  // Phrase-level fade in / out. Expressed in SECONDS and converted
+  // through fps, not as raw frame counts.
+  //
+  // These were hard-coded as 4 and 6 frames, which was only ever correct
+  // while every render ran at 30fps. Now that exports honour the source
+  // video's frame rate, a raw frame count would make the fade twice as
+  // fast on 60fps footage and slower on 24fps footage. The values below
+  // are the old counts divided by 30, so 30fps output is unchanged.
+  const FADE_IN_SEC = 4 / 30;   // ~0.13s
+  const FADE_OUT_SEC = 6 / 30;  // 0.20s
+  const fadeInFrames = Math.max(1, Math.round(FADE_IN_SEC * fps));
+  const fadeOutFrames = Math.max(1, Math.round(FADE_OUT_SEC * fps));
+
   const phraseOpacity = (() => {
-    if (frame < 4) return interpolate(frame, [0, 4], [0, 1]);
-    const fadeStart = phraseDurationFrames - 6;
+    if (frame < fadeInFrames) return interpolate(frame, [0, fadeInFrames], [0, 1]);
+    const fadeStart = phraseDurationFrames - fadeOutFrames;
     if (frame > fadeStart) {
       return interpolate(frame, [fadeStart, phraseDurationFrames], [1, 0], {
         extrapolateLeft: "clamp",

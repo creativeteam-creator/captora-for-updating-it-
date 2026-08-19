@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { bundle } from "@remotion/bundler";
-import { selectComposition, renderMedia } from "@remotion/renderer";
+import { selectComposition, renderMedia, getVideoMetadata } from "@remotion/renderer";
 import { copyFile, mkdir, readFile, stat, unlink } from "fs/promises";
 import { createReadStream, existsSync } from "fs";
 import { Readable } from "stream";
@@ -71,6 +71,78 @@ const COMPOSITION_BY_STYLE: Record<CaptionStyleId, string> = {
 };
 
 const AUDIO_EXTS = new Set([".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac", ".opus", ".wma"]);
+
+/**
+ * Frame rate used when there's nothing to preserve (audio-only projects)
+ * or when probing the source fails.
+ */
+const DEFAULT_FPS = 30;
+
+/**
+ * Ceiling on the frame rate we'll adopt from a source file.
+ *
+ * Every legitimate delivery rate sits at or below this: 23.976, 24, 25,
+ * 29.97, 30, 50, 59.94, 60, 100, 120. Above it we're almost certainly
+ * looking at raw high-speed capture, where honouring the rate would
+ * multiply render time, temp-disk usage and output size several times
+ * over for footage that will be played back at a normal rate anyway.
+ */
+const MAX_FPS = 120;
+
+/**
+ * Read the source video's real frame rate so the export can preserve it.
+ *
+ * Renders used to be hard-coded to 30fps, which silently resampled the
+ * user's footage: 24fps and 25fps material picked up judder, and 60fps
+ * material lost half its frames. For a tool whose only job is burning
+ * captions onto someone else's video, quietly changing its frame rate is
+ * a defect.
+ *
+ * Probing is best-effort by design. Every failure path returns
+ * DEFAULT_FPS, which is exactly the old behaviour — a weird container
+ * should cost you the improvement, never the export.
+ */
+async function detectSourceFps(
+  sourceFile: string,
+  isAudioOnly: boolean
+): Promise<number> {
+  // Audio-only renders draw captions over a flat background. There are no
+  // source frames to preserve, and 30 keeps the animations smooth.
+  if (isAudioOnly) return DEFAULT_FPS;
+
+  try {
+    const meta = await getVideoMetadata(sourceFile);
+    const raw = meta.fps;
+
+    if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) {
+      console.warn(
+        `[/api/render] source reported an unusable fps (${String(raw)}) — falling back to ${DEFAULT_FPS}`
+      );
+      return DEFAULT_FPS;
+    }
+    // Below 1fps is either a timelapse stored oddly or a bad probe.
+    // Rendering captions at 0.5fps would make every animation a slideshow.
+    if (raw < 1) {
+      console.warn(
+        `[/api/render] source fps ${raw} is below 1 — falling back to ${DEFAULT_FPS}`
+      );
+      return DEFAULT_FPS;
+    }
+    if (raw > MAX_FPS) {
+      console.warn(
+        `[/api/render] source fps ${raw} exceeds the ${MAX_FPS} cap — rendering at ${MAX_FPS}. ` +
+          `High-speed capture is rendered at the cap so export time and disk use stay bounded.`
+      );
+      return MAX_FPS;
+    }
+    return raw;
+  } catch (err) {
+    console.warn(
+      `[/api/render] fps probe failed (${err instanceof Error ? err.message : String(err)}) — falling back to ${DEFAULT_FPS}`
+    );
+    return DEFAULT_FPS;
+  }
+}
 
 /**
  * Working directory for cached source media. WEB mode lands downloads
@@ -270,9 +342,19 @@ export async function POST(req: NextRequest) {
     await copyFile(sourceFile, publicAssetPath);
 
     const isAudioOnly = AUDIO_EXTS.has(ext.toLowerCase());
+
+    // Probe the source's own frame rate. Detected server-side from the
+    // file we're about to render rather than taken from the request body:
+    // the browser can't read fps reliably, and this is the one place
+    // holding the actual bytes.
+    const fps = await detectSourceFps(sourceFile, isAudioOnly);
+    console.log(
+      `[/api/render] fps: ${fps}${fps === DEFAULT_FPS ? " (default)" : " (from source)"}`
+    );
+
     const inputProps = {
       words,
-      fps: 30,
+      fps,
       videoSrc: isAudioOnly ? undefined : publicName,
       audioSrc: isAudioOnly ? publicName : undefined,
       durationSec,
@@ -367,11 +449,21 @@ export async function POST(req: NextRequest) {
       if (typeof anyFsp.statfs === "function") {
         const stats = await anyFsp.statfs(tmpdir());
         const availableBytes = Number(stats.bavail) * Number(stats.bsize);
-        // Rough per-second footprint:
+        // Rough per-second footprint AT 30 FPS:
         //   Transparent (ProRes 4444, PNG frames): ~200 MB/s
         //   Regular  (H.264, JPEG frames):        ~15 MB/s
         // Plus a 2 GB safety cushion for Chromium boot + logs.
-        const perSecMB = transparent ? 200 : 15;
+        //
+        // Scaled by the actual frame rate. Temp usage is per-FRAME, not
+        // per-second, so now that renders honour the source's fps a
+        // 60fps export writes twice the frames — and these figures,
+        // written when every render was 30fps, would have under-
+        // estimated it by half. Under-estimating is the one direction
+        // that matters: it lets the render start and then die on "No
+        // space left on device" twenty minutes in, which is the exact
+        // failure this check exists to prevent.
+        const perSecMBAt30 = transparent ? 200 : 15;
+        const perSecMB = perSecMBAt30 * (fps / 30);
         const durationSecEstimate = Number(durationSec) || 60;
         const neededBytes =
           durationSecEstimate * perSecMB * 1024 * 1024 + 2 * 1024 * 1024 * 1024;

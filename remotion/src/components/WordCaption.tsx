@@ -39,7 +39,13 @@ export function WordCaption({ word, isActive, style }: Props) {
   // Fade-out only when the word is long enough to actually have a hold +
   // fade region. Short words (Whisper sometimes emits 0.10–0.20s words like
   // "to") just pop in and hold at full opacity — no fade.
-  const fadeFrames = 3;
+  //
+  // Expressed in SECONDS and converted through fps. This was a raw
+  // `fadeFrames = 3`, which only meant 0.1s while every render was 30fps;
+  // now that exports honour the source frame rate it would run at half
+  // the duration on 60fps footage. 3/30 keeps 30fps output identical.
+  const FADE_OUT_SEC = 3 / 30; // 0.10s
+  const fadeFrames = Math.max(1, Math.round(FADE_OUT_SEC * fps));
   const canFade = wordDurationFrames > popInFrames + fadeFrames + 1;
   const opacity = canFade
     ? interpolate(
