@@ -144,9 +144,15 @@ module.exports = {
     category: "public.app-category.video",
     // Unsigned path: force ad-hoc (identity null) and keep the hardened
     // runtime off — it requires a real Developer ID cert to be useful.
-    // Signed path: let electron-builder resolve the identity from CSC_LINK
-    // and enable the hardened runtime, which notarization requires.
-    identity: macCertPresent ? undefined : null,
+    // Signed path: OMIT `identity` entirely so electron-builder resolves
+    // it from CSC_LINK / CSC_NAME, and enable the hardened runtime, which
+    // notarization requires.
+    //
+    // The key is spread in rather than set to `undefined`: the schema
+    // types `identity` as ["null","string"], and an explicit undefined is
+    // a needless bet on how the validator treats own-but-undefined
+    // properties. Absent is unambiguous.
+    ...(macCertPresent ? {} : { identity: null }),
     hardenedRuntime: macCertPresent,
     gatekeeperAssess: false,
     type: "distribution",

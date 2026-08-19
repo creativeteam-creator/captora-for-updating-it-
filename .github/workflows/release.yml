@@ -83,24 +83,23 @@ jobs:
         if: runner.os == 'macOS'
         run: npm install @remotion/compositor-darwin-x64 --no-save --no-audit --no-fund --force
 
-      - name: Install Linux packaging + runtime dependencies
-        # - libarchive-tools / fakeroot: electron-builder needs these to
-        #   assemble the .deb. AppImage alone would build without them,
-        #   but the .deb target fails with an opaque error.
-        # - libgbm / libasound / libnss3 etc: the headless Chromium that
-        #   Remotion drives at render time links against these. They are
-        #   NOT bundled by electron-builder, so without them the Linux
-        #   build packages cleanly and then dies on the user's first
-        #   export. Installing them here doesn't put them in the
-        #   artifact — it only proves the build itself works — so the
-        #   .deb declares them as dependencies via electron-builder's
-        #   default Electron dependency set.
+      - name: Install Linux packaging dependencies
+        # Only what electron-builder needs to ASSEMBLE the artifacts:
+        #   fakeroot        — building the .deb without root
+        #   libarchive-tools — bsdtar, used for the AppImage payload
+        #
+        # Chromium's runtime libraries (libgbm, libnss3, libasound…) are
+        # deliberately NOT installed. The CI job packages the app, it
+        # never launches it, so they'd prove nothing here — and the
+        # libasound package was renamed to libasound2t64 in Ubuntu 24.04,
+        # which would silently break this job the next time GitHub moves
+        # `ubuntu-latest`. Those libraries belong on the END USER's
+        # machine, where the .deb declares them via electron-builder's
+        # default Electron dependency set.
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            fakeroot libarchive-tools rpm \
-            libgbm1 libasound2t64 libnss3 libatk-bridge2.0-0 libgtk-3-0
+          sudo apt-get install -y --no-install-recommends fakeroot libarchive-tools
 
       - name: Verify Linux Remotion compositor is present
         # The Linux compositor is an optionalDependency of

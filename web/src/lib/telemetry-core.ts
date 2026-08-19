@@ -93,6 +93,14 @@ export function sanitiseContext(
   if (!context) return {};
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(context)) {
+    // Drop undefined outright. Callers build context from optional
+    // request fields (`style`, `width`, `durationSec`…), so undefined is
+    // the common case, not an edge one — and the generic branch below
+    // would turn each into the literal string "undefined", because
+    // JSON.stringify(undefined) returns undefined and JSON.parse then
+    // throws into the String() fallback. That makes "field was absent"
+    // indistinguishable from a real value when reading the table.
+    if (v === undefined) continue;
     if (SENSITIVE_KEY.test(k)) {
       out[k] = "[redacted]";
       continue;

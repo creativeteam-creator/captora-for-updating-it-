@@ -107,9 +107,14 @@ export async function flushSpooledEvents(events: SpooledEvent[]): Promise<number
       id: e.id,
       user_id: user.id,
       occurred_at: e.occurredAt,
-      level: e.level ?? "error",
+      // Clamped, not passed through. `level` and `source` are CHECK
+      // constraints on the table, and this data comes from a plain file
+      // on the user's disk. One edited line would make Postgres reject
+      // the entire batch — taking every legitimate crash report in it
+      // down too.
+      level: e.level === "warn" || e.level === "info" ? e.level : "error",
       // The spool only ever writes main-process events; pin the value
-      // rather than trusting the file, which sits on disk the user can edit.
+      // rather than trusting the file.
       source: "electron-main",
       event: e.event,
       message: String(e.message ?? "").slice(0, MAX_MESSAGE),

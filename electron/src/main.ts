@@ -45,15 +45,22 @@ process.on("uncaughtException", (err) => {
   recordEvent("main.uncaught-exception", err?.message ?? String(err), {
     stack: err?.stack,
   });
-  // Deliberately not re-thrown or exited: Electron's default behaviour
-  // for an uncaught exception in main is to show a dialog and keep
-  // running. Preserving that is better than turning a recoverable error
-  // into a hard quit, and the event is on disk either way.
+  // No re-throw and no exit. Electron registers its OWN
+  // 'uncaughtException' listener that shows the error dialog, and Node
+  // invokes every registered listener — so adding ours records the crash
+  // without replacing what the user already sees.
 });
 
 process.on("unhandledRejection", (reason) => {
   const err = reason instanceof Error ? reason : new Error(String(reason));
   recordEvent("main.unhandled-rejection", err.message, { stack: err.stack });
+  // Worth being explicit: registering this listener at all changes
+  // behaviour. Node 20's default for an unhandled rejection is to throw,
+  // which takes the main process down; with a listener present it no
+  // longer does. That trade is intentional — a rejected promise
+  // somewhere in the main process shouldn't kill a user's session
+  // mid-edit, and unlike before, the failure is now recorded rather than
+  // silently ending the app.
 });
 
 // ──────────────────────────────────────────────────────────────
