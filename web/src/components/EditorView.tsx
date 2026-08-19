@@ -111,6 +111,15 @@ interface Props {
    *  hides. */
   onRetranscribe?: () => void;
   retranscribing?: boolean;
+  /** Caption IN / OUT trim points in seconds — words outside this
+   *  range are dropped from the render + preview. Set/clear via the
+   *  Timeline's Mark In / Mark Out buttons (I / O shortcuts). */
+  captionInSec?: number | null;
+  captionOutSec?: number | null;
+  onCaptionRangeChange?: (
+    inSec: number | null,
+    outSec: number | null
+  ) => void;
 }
 
 export function EditorView({
@@ -119,6 +128,7 @@ export function EditorView({
   words, onWordsChange,
   onBack, onExport, exporting, exportDownloadUrl, exportError,
   onRetranscribe, retranscribing,
+  captionInSec, captionOutSec, onCaptionRangeChange,
   transparent, onTransparentChange,
   userFonts, onUserFontsChanged,
   canvasWidth, canvasHeight,
@@ -545,7 +555,14 @@ export function EditorView({
               ext={project.ext}
               style={styleId}
               computedStyle={computedStyle}
-              words={words}
+              // Apply IN/OUT trim to the preview so what the user sees
+              // is what the exported MP4 will contain. Same filter the
+              // render request uses in page.tsx.
+              words={words.filter((w) => {
+                if (captionInSec != null && w.start < captionInSec) return false;
+                if (captionOutSec != null && w.start > captionOutSec) return false;
+                return true;
+              })}
               durationSec={project.whisper.duration}
               userFonts={userFonts}
               width={canvasWidth}
@@ -665,6 +682,9 @@ export function EditorView({
           onSelectLine={onSelectLine}
           userBreaks={userBreaks}
           onUserBreaksChange={onUserBreaksChange}
+          captionInSec={captionInSec}
+          captionOutSec={captionOutSec}
+          onCaptionRangeChange={onCaptionRangeChange}
         />
 
         {exportError && (

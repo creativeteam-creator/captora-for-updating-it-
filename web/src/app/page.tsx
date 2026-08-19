@@ -107,6 +107,12 @@ export default function Home() {
    *  Set is intentionally simple — supports undo via the editor's
    *  snapshot system. */
   const [userBreaks, setUserBreaks] = useState<Set<number>>(new Set());
+  /** Caption IN / OUT trim points in seconds — words outside this range
+   *  are excluded from preview + render. `null` on either side means
+   *  "no trim on that end". Session-only state for now (not persisted
+   *  to the DB); a future migration can promote this to a column. */
+  const [captionInSec, setCaptionInSec] = useState<number | null>(null);
+  const [captionOutSec, setCaptionOutSec] = useState<number | null>(null);
   /** Currently-selected line in the timeline (centisecond key) — when
    *  set, picking a template applies to ONLY this line; when null,
    *  picking a template changes the project-wide `styleId`. */
@@ -579,7 +585,16 @@ export default function Home() {
       // Render uses the latest edited words, not the originals from the
       // project record — typos / corrections fixed in the captions list
       // flow straight into the MP4.
-      const wordsForRender = editedWords ?? project.whisper.words;
+      const rawWordsForRender = editedWords ?? project.whisper.words;
+      // Apply IN/OUT trim: drop any word whose start is before the IN
+      // point or after the OUT point. The video track still plays for
+      // the full duration; only the captions overlay is masked to the
+      // chosen slice. `null` on either side = no trim on that end.
+      const wordsForRender = rawWordsForRender.filter((w) => {
+        if (captionInSec != null && w.start < captionInSec) return false;
+        if (captionOutSec != null && w.start > captionOutSec) return false;
+        return true;
+      });
       // Send only the fonts whose URLs resolved — render Chromium needs
       // a downloadable URL to inject @font-face. Fonts without URLs are
       // recently-uploaded ones whose signed URL hasn't loaded yet.
@@ -851,6 +866,13 @@ export default function Home() {
           onWordSizesChange={setWordSizes}
           userBreaks={userBreaks}
           onUserBreaksChange={setUserBreaks}
+          captionInSec={captionInSec}
+          captionOutSec={captionOutSec}
+          onCaptionRangeChange={(inSec, outSec) => {
+            recordEditorChange();
+            setCaptionInSec(inSec);
+            setCaptionOutSec(outSec);
+          }}
         />
         <SettingsModal
           open={settingsOpen}

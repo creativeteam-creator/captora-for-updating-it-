@@ -58,6 +58,16 @@ interface Props {
    *  the CaptionsList uses, so both surfaces stay in sync. */
   userBreaks?: Set<number>;
   onUserBreaksChange?: (next: Set<number>) => void;
+  /** Caption IN / OUT trim points in seconds. Words outside this range
+   *  are excluded from both the preview and the rendered MP4. `null`
+   *  on either side means "no trim on that end" — captions run from
+   *  the start of the video / to the end. */
+  captionInSec?: number | null;
+  captionOutSec?: number | null;
+  onCaptionRangeChange?: (
+    inSec: number | null,
+    outSec: number | null
+  ) => void;
 }
 
 const FPS_DEFAULT = 30;
@@ -106,10 +116,75 @@ export function Timeline({
   onSelectLine,
   userBreaks,
   onUserBreaksChange,
+  captionInSec,
+  captionOutSec,
+  onCaptionRangeChange,
 }: Props) {
   const stripRef = useRef<HTMLDivElement>(null);
   const [currentSec, setCurrentSec] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
+
+  // ── Caption IN / OUT trim ──────────────────────────────────────────
+  // Users mark IN and OUT points on the timeline; only words that fall
+  // inside [in, out] get rendered. Handy for skipping intros / outros
+  // where the audio plays but you don't want the captions overlay.
+  //
+  // Keyboard shortcuts:
+  //   I → mark IN at current playhead
+  //   O → mark OUT at current playhead
+  //   Shift+I / Shift+O → clear that endpoint
+  const markInHere = () => {
+    if (!onCaptionRangeChange) return;
+    // Clamp: IN can't be after OUT.
+    const proposed = currentSec;
+    const outClamped =
+      captionOutSec != null && proposed >= captionOutSec ? null : captionOutSec;
+    onCaptionRangeChange(proposed, outClamped ?? null);
+  };
+  const markOutHere = () => {
+    if (!onCaptionRangeChange) return;
+    const proposed = currentSec;
+    const inClamped =
+      captionInSec != null && proposed <= captionInSec ? null : captionInSec;
+    onCaptionRangeChange(inClamped ?? null, proposed);
+  };
+  const clearIn = () => {
+    if (!onCaptionRangeChange) return;
+    onCaptionRangeChange(null, captionOutSec ?? null);
+  };
+  const clearOut = () => {
+    if (!onCaptionRangeChange) return;
+    onCaptionRangeChange(captionInSec ?? null, null);
+  };
+  const clearBothRange = () => {
+    if (!onCaptionRangeChange) return;
+    onCaptionRangeChange(null, null);
+  };
+
+  // Global keydown for I / O / Shift+I / Shift+O. Skip when focus is
+  // inside an input/textarea so typing "i" in a caption edit doesn't
+  // fire the marker.
+  useEffect(() => {
+    if (!onCaptionRangeChange) return;
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const k = e.key.toLowerCase();
+      if (k === "i") {
+        e.preventDefault();
+        if (e.shiftKey) clearIn();
+        else markInHere();
+      } else if (k === "o") {
+        e.preventDefault();
+        if (e.shiftKey) clearOut();
+        else markOutHere();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [captionInSec, captionOutSec, currentSec, onCaptionRangeChange]);
 
   // Per-track heights — Premiere-style independent track sizing. Each
   // track (Captions, Video, Audio) has its own row height that the
@@ -743,6 +818,48 @@ export function Timeline({
         <span className="font-mono tabular-nums">
           {formatTime(currentSec)} <span className="opacity-60">/ {formatTime(durationSec)}</span>
         </span>
+
+        {/* Caption IN / OUT mark buttons — trim which portion of the
+            audio the captions overlay covers. Keyboard: I / O. */}
+        {onCaptionRangeChange && (
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={markInHere}
+              title={`Mark IN at ${formatTime(currentSec)} (I)`}
+              className={`flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide transition ${
+                captionInSec != null
+                  ? "border-emerald-500 bg-emerald-500/20 text-emerald-300"
+                  : "border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--text-muted)] hover:border-emerald-500 hover:text-emerald-300"
+              }`}
+            >
+              [ In{captionInSec != null ? ` ${formatTime(captionInSec)}` : ""}
+            </button>
+            <button
+              type="button"
+              onClick={markOutHere}
+              title={`Mark OUT at ${formatTime(currentSec)} (O)`}
+              className={`flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide transition ${
+                captionOutSec != null
+                  ? "border-rose-500 bg-rose-500/20 text-rose-300"
+                  : "border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--text-muted)] hover:border-rose-500 hover:text-rose-300"
+              }`}
+            >
+              Out{captionOutSec != null ? ` ${formatTime(captionOutSec)}` : ""} ]
+            </button>
+            {(captionInSec != null || captionOutSec != null) && (
+              <button
+                type="button"
+                onClick={clearBothRange}
+                title="Clear caption range (both marks)"
+                className="rounded border border-[var(--border)] bg-[var(--bg-elevated)] px-1.5 py-0.5 text-[10px] text-[var(--text-muted)] hover:border-[var(--text)] hover:text-[var(--text)]"
+              >
+                ×
+              </button>
+            )}
+          </div>
+        )}
+
         <span className="ml-auto text-[10px] uppercase tracking-wide opacity-70">
           Click strip to seek · click chip to edit word
         </span>
@@ -1121,6 +1238,50 @@ export function Timeline({
                 onDoubleClick={() => resetTrack("audio")}
               />
             </div>
+
+            {/* ── Caption IN / OUT visual markers + dimmed regions ─
+                Emerald IN handle at the left, rose OUT handle at the
+                right. The area OUTSIDE the [in, out] range gets a soft
+                black overlay so users see at a glance which slice of
+                the video will have captions. Handles span all three
+                tracks vertically like the playhead. */}
+            {captionInSec != null && (
+              <>
+                <div
+                  className="pointer-events-none absolute top-0 bottom-0 z-20 bg-black/45"
+                  style={{ left: 0, width: `${captionInSec * pxPerSec}px` }}
+                />
+                <div
+                  className="pointer-events-none absolute top-0 bottom-0 z-25"
+                  style={{ left: `${captionInSec * pxPerSec}px` }}
+                >
+                  <div className="h-full w-0.5 bg-emerald-400" />
+                  <div className="absolute -left-1.5 top-0 rounded-sm bg-emerald-400 px-1 py-0.5 text-[8px] font-bold uppercase text-black">
+                    In
+                  </div>
+                </div>
+              </>
+            )}
+            {captionOutSec != null && (
+              <>
+                <div
+                  className="pointer-events-none absolute top-0 bottom-0 z-20 bg-black/45"
+                  style={{
+                    left: `${captionOutSec * pxPerSec}px`,
+                    width: `${Math.max(0, (durationSec - captionOutSec) * pxPerSec)}px`,
+                  }}
+                />
+                <div
+                  className="pointer-events-none absolute top-0 bottom-0 z-25"
+                  style={{ left: `${captionOutSec * pxPerSec}px` }}
+                >
+                  <div className="h-full w-0.5 bg-rose-400" />
+                  <div className="absolute -left-1.5 top-0 rounded-sm bg-rose-400 px-1 py-0.5 text-[8px] font-bold uppercase text-black">
+                    Out
+                  </div>
+                </div>
+              </>
+            )}
 
             {/* ── Playhead — spans all three tracks vertically ─ */}
             <div
