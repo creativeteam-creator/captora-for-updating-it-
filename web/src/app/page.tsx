@@ -149,9 +149,18 @@ export default function Home() {
     setTransparent(snapshot.transparent);
   }, []);
 
+  // Mirror stack lengths as state so the UI can show enabled/disabled
+  // Undo / Redo buttons. Refs alone don't trigger re-renders when
+  // pushed/popped; these `set*` calls force a re-render after each
+  // mutation so the toolbar buttons update in real time.
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
+
   const clearEditorHistory = useCallback(() => {
     undoStackRef.current = [];
     redoStackRef.current = [];
+    setCanUndo(false);
+    setCanRedo(false);
   }, []);
 
   const recordEditorChange = useCallback(() => {
@@ -160,6 +169,8 @@ export default function Home() {
       undoStackRef.current.shift();
     }
     redoStackRef.current = [];
+    setCanUndo(true);
+    setCanRedo(false);
   }, [makeEditorSnapshot]);
 
   const undoEditorChange = useCallback(() => {
@@ -167,6 +178,8 @@ export default function Home() {
     if (!previous) return;
     redoStackRef.current.push(makeEditorSnapshot());
     applyEditorSnapshot(previous);
+    setCanUndo(undoStackRef.current.length > 0);
+    setCanRedo(true);
   }, [applyEditorSnapshot, makeEditorSnapshot]);
 
   const redoEditorChange = useCallback(() => {
@@ -174,6 +187,8 @@ export default function Home() {
     if (!next) return;
     undoStackRef.current.push(makeEditorSnapshot());
     applyEditorSnapshot(next);
+    setCanUndo(true);
+    setCanRedo(redoStackRef.current.length > 0);
   }, [applyEditorSnapshot, makeEditorSnapshot]);
 
   useEffect(() => {
@@ -873,6 +888,10 @@ export default function Home() {
             setCaptionInSec(inSec);
             setCaptionOutSec(outSec);
           }}
+          onUndo={undoEditorChange}
+          onRedo={redoEditorChange}
+          canUndo={canUndo}
+          canRedo={canRedo}
         />
         <SettingsModal
           open={settingsOpen}

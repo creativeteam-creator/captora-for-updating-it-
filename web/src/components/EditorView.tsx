@@ -120,6 +120,14 @@ interface Props {
     inSec: number | null,
     outSec: number | null
   ) => void;
+  /** Undo / Redo controls surfaced as toolbar buttons. Same handlers
+   *  the Ctrl+Z / Ctrl+Y keyboard shortcuts already fire. The
+   *  can* flags gate the enabled/disabled state so users see when
+   *  there's nothing left to undo/redo. */
+  onUndo?: () => void;
+  onRedo?: () => void;
+  canUndo?: boolean;
+  canRedo?: boolean;
 }
 
 export function EditorView({
@@ -129,6 +137,7 @@ export function EditorView({
   onBack, onExport, exporting, exportDownloadUrl, exportError,
   onRetranscribe, retranscribing,
   captionInSec, captionOutSec, onCaptionRangeChange,
+  onUndo, onRedo, canUndo, canRedo,
   transparent, onTransparentChange,
   userFonts, onUserFontsChanged,
   canvasWidth, canvasHeight,
@@ -407,6 +416,41 @@ export function EditorView({
               </svg>
               New File
             </button>
+            {/* Undo / Redo — same handlers Ctrl+Z / Ctrl+Y already
+                fire. Buttons are enabled only when the corresponding
+                stack has entries so users see at a glance when
+                there's nothing left to walk back or forward. */}
+            {onUndo && (
+              <>
+                <div className="h-6 w-px bg-[var(--border)] mx-1" />
+                <button
+                  type="button"
+                  onClick={onUndo}
+                  disabled={!canUndo}
+                  className="flex h-8 w-8 items-center justify-center rounded-md border border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-[var(--border)] disabled:hover:text-[var(--text-muted)]"
+                  title={canUndo ? "Undo (Ctrl / Cmd + Z)" : "Nothing to undo"}
+                  aria-label="Undo"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="h-3.5 w-3.5">
+                    <path d="M3 7v6h6" />
+                    <path d="M3 13a9 9 0 1 0 3-6.7L3 9" />
+                  </svg>
+                </button>
+                <button
+                  type="button"
+                  onClick={onRedo}
+                  disabled={!canRedo}
+                  className="flex h-8 w-8 items-center justify-center rounded-md border border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-[var(--border)] disabled:hover:text-[var(--text-muted)]"
+                  title={canRedo ? "Redo (Ctrl / Cmd + Shift + Z, or Ctrl + Y)" : "Nothing to redo"}
+                  aria-label="Redo"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="h-3.5 w-3.5">
+                    <path d="M21 7v6h-6" />
+                    <path d="M21 13a9 9 0 1 1-3-6.7L21 9" />
+                  </svg>
+                </button>
+              </>
+            )}
             <div className="h-6 w-px bg-[var(--border)] mx-1" />
             <div>
               <div className="flex items-center gap-2">
