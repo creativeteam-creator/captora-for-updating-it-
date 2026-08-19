@@ -225,6 +225,13 @@ interface RenderBody {
    * the receiving side.
    */
   userBreaks?: number[];
+  /**
+   * Caption grouping mode — "phrase" (default 3-6 word chunks) or
+   * "sentence" (whole sentence per line). Forwarded into the
+   * composition inputProps so the rendered MP4's line grouping
+   * matches the editor's Captions panel toggle.
+   */
+  captionMode?: "phrase" | "sentence";
 }
 
 /**
@@ -282,7 +289,7 @@ export async function POST(req: NextRequest) {
 
     // ───── Parse + validate body ─────
     const body = (await req.json()) as RenderBody;
-    const { projectId, style, words, durationSec, computedStyle, transparent, customFonts, width, height, lineAnimations, lineStyles, userBreaks } = body;
+    const { projectId, style, words, durationSec, computedStyle, transparent, customFonts, width, height, lineAnimations, lineStyles, userBreaks, captionMode } = body;
     if (!projectId || !body.ext || !style || !Array.isArray(words)) {
       return NextResponse.json(
         { ok: false, error: "Missing required fields: projectId, ext, style, words" },
@@ -404,6 +411,7 @@ export async function POST(req: NextRequest) {
       // exactly the same word indexes the captions list displayed.
       userBreaks:
         Array.isArray(userBreaks) && userBreaks.length > 0 ? userBreaks : undefined,
+      captionMode: captionMode === "sentence" ? "sentence" : undefined,
     };
     console.log(
       `[/api/render] canvas: ${inputProps.width ?? "default"}×${inputProps.height ?? "default"}`

@@ -130,15 +130,24 @@ function pickBatchSize(p: ProviderInfo): number {
 // Path to user-corrections glossary (written by /api/glossary)
 const GLOSSARY_PATH = join(process.cwd(), "glossary.json");
 
-/** Read the local glossary.json (user corrections from caption editor). */
+/** Read the local glossary.json (user corrections from caption editor),
+ *  MERGED with the built-in clinic glossary so QHT terms + common
+ *  medical mishearings are always corrected even when the user hasn't
+ *  added their own entries. User entries win on collision. */
 async function readLocalGlossary(): Promise<Record<string, string>> {
+  let userEntries: Record<string, string> = {};
   try {
-    if (!existsSync(GLOSSARY_PATH)) return {};
-    const raw = await readFile(GLOSSARY_PATH, "utf-8");
-    return JSON.parse(raw) as Record<string, string>;
+    if (existsSync(GLOSSARY_PATH)) {
+      const raw = await readFile(GLOSSARY_PATH, "utf-8");
+      userEntries = JSON.parse(raw) as Record<string, string>;
+    }
   } catch {
-    return {};
+    userEntries = {};
   }
+  // Late import to avoid a circular dep if any glossary consumer
+  // eventually re-imports hinglish-llm.
+  const { mergeWithClinicGlossary } = await import("./clinicGlossary");
+  return mergeWithClinicGlossary(userEntries);
 }
 
 /**

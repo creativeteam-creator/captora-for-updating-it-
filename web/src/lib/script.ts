@@ -372,19 +372,34 @@ export function polishRomanHindi(text: string): string {
  * clinic/brand/person/location words.
  */
 function applyGlossaryCorrections(text: string): string {
-  const raw = process.env.CAPTORA_TRANSCRIPT_GLOSSARY ?? "";
-  if (!raw.trim()) return text;
-
   let s = text;
-  for (const entry of raw.split(",")) {
-    const [fromRaw, toRaw] = entry.split("=");
-    const from = fromRaw?.trim();
-    const to = toRaw?.trim();
-    if (!from || !to) continue;
-    s = s.replace(
-      new RegExp(`\\b${escapeRegExp(from)}\\b`, "gi"),
-      to
-    );
+
+  // Built-in clinic glossary (QHT terms + medical mishearings) runs
+  // first so its entries can be overridden by env-var configuration
+  // if the operator ships a different mapping for the same key.
+  // Lazy require via dynamic import isn't needed because clinicGlossary
+  // has no runtime deps — the top-level import is safe.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { CLINIC_GLOSSARY } = require("./clinicGlossary") as {
+    CLINIC_GLOSSARY: Record<string, string>;
+  };
+  for (const [from, to] of Object.entries(CLINIC_GLOSSARY)) {
+    s = s.replace(new RegExp(`\\b${escapeRegExp(from)}\\b`, "gi"), to);
+  }
+
+  // Env-var overrides on top of the built-ins.
+  const raw = process.env.CAPTORA_TRANSCRIPT_GLOSSARY ?? "";
+  if (raw.trim()) {
+    for (const entry of raw.split(",")) {
+      const [fromRaw, toRaw] = entry.split("=");
+      const from = fromRaw?.trim();
+      const to = toRaw?.trim();
+      if (!from || !to) continue;
+      s = s.replace(
+        new RegExp(`\\b${escapeRegExp(from)}\\b`, "gi"),
+        to
+      );
+    }
   }
   return s;
 }

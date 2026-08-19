@@ -31,9 +31,18 @@ interface GroupOptions {
    * words[5..] start the next line.
    */
   userBreaks?: Set<number>;
+  /**
+   * "sentence" mode groups the WHOLE sentence into one caption line,
+   * only breaking on sentence-terminating punctuation (.?!।|) or a
+   * gap longer than 1.2s. Better for slower-reading audiences and
+   * for content where each thought lands as one on-screen unit.
+   * Default "phrase" mode keeps the short 3-6 word chunks tuned for
+   * kinetic caption styles.
+   */
+  mode?: "phrase" | "sentence";
 }
 
-const DEFAULT_OPTS: Required<Omit<GroupOptions, "userBreaks">> = {
+const DEFAULT_OPTS: Required<Omit<GroupOptions, "userBreaks" | "mode">> = {
   pauseThresholdSec: 0.4,
   maxWordsPerLine: 6,
   maxDurationSec: 3.0,
@@ -43,7 +52,16 @@ export function groupWordsIntoLines(
   words: WhisperWord[],
   opts: GroupOptions = {}
 ): CaptionLine[] {
-  const { pauseThresholdSec, maxWordsPerLine, maxDurationSec } = { ...DEFAULT_OPTS, ...opts };
+  const mode = opts.mode ?? "phrase";
+  // Sentence mode loosens the word-count + duration caps so a whole
+  // sentence can render as one line. Pause threshold widens so a
+  // natural mid-sentence beat doesn't split the caption.
+  const sentenceDefaults = { pauseThresholdSec: 1.2, maxWordsPerLine: 40, maxDurationSec: 12 };
+  const merged =
+    mode === "sentence"
+      ? { ...DEFAULT_OPTS, ...sentenceDefaults, ...opts }
+      : { ...DEFAULT_OPTS, ...opts };
+  const { pauseThresholdSec, maxWordsPerLine, maxDurationSec } = merged;
   const userBreaks = opts.userBreaks;
   const lines: CaptionLine[] = [];
   let current: WhisperWord[] = [];

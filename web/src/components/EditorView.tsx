@@ -128,6 +128,12 @@ interface Props {
   onRedo?: () => void;
   canUndo?: boolean;
   canRedo?: boolean;
+  /** Caption grouping mode: "phrase" (short chunks, default) or
+   *  "sentence" (whole-sentence-per-line, better for slower reading).
+   *  Forwarded to CaptionsList (which drives the panel) and to the
+   *  SRT/VTT export helper. */
+  captionMode?: "phrase" | "sentence";
+  onCaptionModeChange?: (mode: "phrase" | "sentence") => void;
 }
 
 export function EditorView({
@@ -138,6 +144,7 @@ export function EditorView({
   onRetranscribe, retranscribing,
   captionInSec, captionOutSec, onCaptionRangeChange,
   onUndo, onRedo, canUndo, canRedo,
+  captionMode, onCaptionModeChange,
   transparent, onTransparentChange,
   userFonts, onUserFontsChanged,
   canvasWidth, canvasHeight,
@@ -365,6 +372,8 @@ export function EditorView({
             userBreaks={userBreaks}
             onUserBreaksChange={onUserBreaksChange}
             playerRef={playerRef}
+            captionMode={captionMode}
+            onCaptionModeChange={onCaptionModeChange}
           />
         )}
         {leftTab === "fonts" && (
@@ -546,6 +555,7 @@ export function EditorView({
               words={words}
               userBreaks={userBreaks}
               projectTitle={project.title}
+              captionMode={captionMode}
             />
             <button
               type="button"
@@ -615,6 +625,7 @@ export function EditorView({
               lineStyles={computedLineStyles}
               wordSizes={wordSizes}
               userBreaks={Array.from(userBreaks)}
+              captionMode={captionMode}
               playerRef={playerRef}
               dragModeActive={dragModeActive}
               onPositionChange={handleCaptionDrag}
@@ -880,10 +891,12 @@ function SubtitlesDropdown({
   words,
   userBreaks,
   projectTitle,
+  captionMode = "phrase",
 }: {
   words: WhisperWord[];
   userBreaks: Set<number>;
   projectTitle: string;
+  captionMode?: "phrase" | "sentence";
 }) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -901,13 +914,15 @@ function SubtitlesDropdown({
 
   const safeTitle = (projectTitle || "captions").replace(/[<>:"|?*\\/]+/g, "");
 
+  // SRT/VTT lines match the on-screen grouping — pass captionMode so
+  // sentence-mode users get one line per sentence in the sidecar too.
   const handleSrt = () => {
-    const srt = whisperWordsToSrt(words, { userBreaks });
+    const srt = whisperWordsToSrt(words, { userBreaks, mode: captionMode });
     downloadTextFile(`${safeTitle}.srt`, srt, "application/x-subrip;charset=utf-8");
     setOpen(false);
   };
   const handleVtt = () => {
-    const vtt = whisperWordsToVtt(words, { userBreaks });
+    const vtt = whisperWordsToVtt(words, { userBreaks, mode: captionMode });
     downloadTextFile(`${safeTitle}.vtt`, vtt, "text/vtt;charset=utf-8");
     setOpen(false);
   };

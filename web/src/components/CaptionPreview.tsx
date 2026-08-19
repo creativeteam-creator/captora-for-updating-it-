@@ -83,6 +83,10 @@ interface Props {
    *  Remotion bundle prop boundary; CaptionsTimeline rebuilds the
    *  Set on the receiving side. */
   userBreaks?: number[];
+  /** Caption grouping mode — "phrase" (default) or "sentence".
+   *  Forwarded into CaptionsTimeline via inputProps so the preview
+   *  matches the editor's toggle. */
+  captionMode?: "phrase" | "sentence";
   /** Optional ref the parent passes in so the new Timeline can read the
    *  Player's current frame and seek to a given frame on click. */
   playerRef?: React.Ref<PlayerRef>;
@@ -103,7 +107,7 @@ interface Props {
 export function CaptionPreview({
   file, ext, style, computedStyle, words, durationSec, userFonts,
   width = DEFAULT_WIDTH, height = DEFAULT_HEIGHT,
-  lineAnimations, lineStyles, wordSizes, userBreaks, playerRef,
+  lineAnimations, lineStyles, wordSizes, userBreaks, captionMode, playerRef,
   dragModeActive, onPositionChange,
 }: Props) {
   // Drag overlay — captures pointer events while `dragModeActive` is true
@@ -214,8 +218,9 @@ export function CaptionPreview({
       lineStyles,
       wordSizes,
       userBreaks,
+      captionMode,
     }),
-    [playableWords, isAudio, blobUrl, durationSec, computedStyle, customFonts, width, height, lineAnimations, lineStyles, wordSizes, userBreaks]
+    [playableWords, isAudio, blobUrl, durationSec, computedStyle, customFonts, width, height, lineAnimations, lineStyles, wordSizes, userBreaks, captionMode]
   );
 
   const durationInFrames = Math.max(1, Math.ceil((durationSec || 1) * FPS));

@@ -19,9 +19,13 @@ interface GroupOptions {
   /** Indexes after which the grouper MUST start a new line. Mirrors
    *  the user-defined line breaks set in the captions editor. */
   userBreaks?: Set<number>;
+  /** "phrase" (default) = short 3-6 word chunks; "sentence" = whole
+   *  sentence per caption line. Mirror of the web-side option so the
+   *  rendered MP4 matches the editor's display. */
+  mode?: "phrase" | "sentence";
 }
 
-const DEFAULT_OPTS: Required<Omit<GroupOptions, "userBreaks">> = {
+const DEFAULT_OPTS: Required<Omit<GroupOptions, "userBreaks" | "mode">> = {
   pauseThresholdSec: 0.4,
   maxWordsPerLine: 6,
   maxDurationSec: 3.0,
@@ -31,7 +35,13 @@ export function groupWordsIntoLines(
   words: WhisperWord[],
   opts: GroupOptions = {}
 ): CaptionLine[] {
-  const { pauseThresholdSec, maxWordsPerLine, maxDurationSec } = { ...DEFAULT_OPTS, ...opts };
+  const mode = opts.mode ?? "phrase";
+  const sentenceDefaults = { pauseThresholdSec: 1.2, maxWordsPerLine: 40, maxDurationSec: 12 };
+  const merged =
+    mode === "sentence"
+      ? { ...DEFAULT_OPTS, ...sentenceDefaults, ...opts }
+      : { ...DEFAULT_OPTS, ...opts };
+  const { pauseThresholdSec, maxWordsPerLine, maxDurationSec } = merged;
   const userBreaks = opts.userBreaks;
   const lines: CaptionLine[] = [];
   let current: WhisperWord[] = [];

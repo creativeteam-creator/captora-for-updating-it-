@@ -104,21 +104,64 @@ interface Props {
    *  the issue Mac users were reporting on long videos. */
   playerRef?: React.RefObject<PlayerRef | null>;
   fps?: number;
+  /** Caption grouping mode: "phrase" (default, 3-6 words) or
+   *  "sentence" (whole sentence per line). Same value the renderer
+   *  receives so preview + MP4 match. */
+  captionMode?: "phrase" | "sentence";
+  onCaptionModeChange?: (mode: "phrase" | "sentence") => void;
 }
+
+/**
+ * Common English + Hindi filler words the "Clean up" button strips.
+ * Case-insensitive match against the word text after punctuation is
+ * stripped. Multi-token fillers like "you know" aren't handled —
+ * matching contiguous-word sequences would risk false positives on
+ * legitimate speech.
+ */
+const FILLER_WORDS = new Set([
+  "um", "uh", "uhh", "umm", "ah", "aa", "ahh", "hmm", "err",
+  "haan", "hmmm", "yaar", "actually", "basically",
+]);
 
 export function CaptionsList({
   words, onWordsChange, lineAnimations, onLineAnimationChange,
   wordSizes, onWordSizesChange,
   userBreaks, onUserBreaksChange,
   playerRef, fps = 30,
+  captionMode = "phrase", onCaptionModeChange,
 }: Props) {
-  // Pass user-defined break points to the grouper so the displayed
-  // lines match what the renderer will produce (Remotion side also
-  // receives userBreaks via CaptionsCompositionProps).
+  // Pass user-defined break points AND the grouping mode to the grouper
+  // so the displayed lines match what the renderer will produce.
   const lines = useMemo(
-    () => groupWordsIntoLines(words, { userBreaks }),
-    [words, userBreaks]
+    () => groupWordsIntoLines(words, { userBreaks, mode: captionMode }),
+    [words, userBreaks, captionMode]
   );
+
+  // Count how many filler words would be removed if the user clicks
+  // "Clean up". Displayed on the button so users know before firing.
+  const fillerCount = useMemo(() => {
+    let n = 0;
+    for (const w of words) {
+      const t = w.word.toLowerCase().replace(/[.,!?;:]/g, "").trim();
+      if (FILLER_WORDS.has(t)) n++;
+    }
+    return n;
+  }, [words]);
+
+  const cleanUpTalk = () => {
+    if (!onWordsChange || fillerCount === 0) return;
+    const ok = window.confirm(
+      `Remove ${fillerCount} filler word${fillerCount === 1 ? "" : "s"} ` +
+        `(${Array.from(FILLER_WORDS).slice(0, 6).join(", ")}, …)?\n\n` +
+        `You can undo this with Ctrl/Cmd + Z.`
+    );
+    if (!ok) return;
+    const cleaned = words.filter((w) => {
+      const t = w.word.toLowerCase().replace(/[.,!?;:]/g, "").trim();
+      return !FILLER_WORDS.has(t);
+    });
+    onWordsChange(cleaned);
+  };
   // Toggle a break AFTER word index `idx`. Click ⏎ between word N
   // and word N+1 — adds N to userBreaks (splits the line); click
   // again removes it (merges back).
@@ -422,6 +465,55 @@ export function CaptionsList({
       <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
         <div className="text-sm font-semibold">Captions</div>
         <div className="flex items-center gap-2">
+          {/* Grouping mode toggle: Phrase (default 3-6 word chunks) or
+              Sentence (whole sentence per line). Applies to preview +
+              render — the same grouping the composition uses. */}
+          {onCaptionModeChange && (
+            <div className="flex overflow-hidden rounded-md border border-[var(--border)] text-[10px]">
+              <button
+                type="button"
+                onClick={() => onCaptionModeChange("phrase")}
+                className={`px-2 py-0.5 transition ${
+                  captionMode === "phrase"
+                    ? "bg-[var(--accent)] text-white"
+                    : "text-[var(--text-muted)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text)]"
+                }`}
+                title="Short phrase chunks (3-6 words) — good for kinetic captions"
+              >
+                Phrase
+              </button>
+              <button
+                type="button"
+                onClick={() => onCaptionModeChange("sentence")}
+                className={`px-2 py-0.5 transition ${
+                  captionMode === "sentence"
+                    ? "bg-[var(--accent)] text-white"
+                    : "text-[var(--text-muted)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text)]"
+                }`}
+                title="Whole sentence per line — better for slower reading"
+              >
+                Sentence
+              </button>
+            </div>
+          )}
+          {/* Clean up talk: strips um/uh/hmm/etc. filler words in one
+              click. Button is disabled when there are no fillers so
+              users know when the transcript is already clean. */}
+          {onWordsChange && (
+            <button
+              type="button"
+              onClick={cleanUpTalk}
+              disabled={fillerCount === 0}
+              className="flex items-center gap-1 rounded-md border border-[var(--border)] bg-[var(--bg-elevated)] px-2 py-0.5 text-[10px] text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)] disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-[var(--border)] disabled:hover:text-[var(--text-muted)]"
+              title={
+                fillerCount === 0
+                  ? "No filler words detected"
+                  : `Remove ${fillerCount} filler word${fillerCount === 1 ? "" : "s"} (um / uh / hmm / actually / …)`
+              }
+            >
+              🧹 Clean{fillerCount > 0 ? ` · ${fillerCount}` : ""}
+            </button>
+          )}
           {onWordsChange && (
             <button
               type="button"

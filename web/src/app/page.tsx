@@ -113,6 +113,10 @@ export default function Home() {
    *  to the DB); a future migration can promote this to a column. */
   const [captionInSec, setCaptionInSec] = useState<number | null>(null);
   const [captionOutSec, setCaptionOutSec] = useState<number | null>(null);
+  /** Caption grouping mode: "phrase" (3-6 word chunks, default) or
+   *  "sentence" (whole sentence per line). Threaded through preview,
+   *  render, and SRT export. Session-only for now. */
+  const [captionMode, setCaptionMode] = useState<"phrase" | "sentence">("phrase");
   /** Currently-selected line in the timeline (centisecond key) — when
    *  set, picking a template applies to ONLY this line; when null,
    *  picking a template changes the project-wide `styleId`. */
@@ -637,6 +641,10 @@ export default function Home() {
           // so the rendered MP4 honours the same line splits the
           // captions list displays in the editor.
           userBreaks: Array.from(userBreaks),
+          // Caption grouping mode — "phrase" default, or "sentence"
+          // for whole-sentence-per-line rendering. Preview + MP4 both
+          // consume this via CaptionsTimeline.
+          captionMode,
         }),
       });
       if (!res.ok) {
@@ -892,6 +900,11 @@ export default function Home() {
           onRedo={redoEditorChange}
           canUndo={canUndo}
           canRedo={canRedo}
+          captionMode={captionMode}
+          onCaptionModeChange={(mode) => {
+            recordEditorChange();
+            setCaptionMode(mode);
+          }}
         />
         <SettingsModal
           open={settingsOpen}

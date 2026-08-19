@@ -28,6 +28,9 @@ interface Props {
    *  serialisable through the Remotion bundle prop boundary) and is
    *  rebuilt into a Set before passing to groupWordsIntoLines. */
   userBreaks?: number[];
+  /** Caption grouping mode: "phrase" (default) or "sentence".
+   *  Mirror of the editor's captionMode. */
+  captionMode?: "phrase" | "sentence";
 }
 
 /** Build the centisecond key matching the writer side (page.tsx). */
@@ -100,7 +103,7 @@ function resolveLineStyle(
  * The cycling is deterministic, so re-rendering the same audio always
  * produces the same animation order — useful for previews matching MP4s.
  */
-export function CaptionsTimeline({ words, style, lineAnimations, lineStyles, wordSizes, userBreaks }: Props) {
+export function CaptionsTimeline({ words, style, lineAnimations, lineStyles, wordSizes, userBreaks, captionMode }: Props) {
   const { fps } = useVideoConfig();
   // Rebuild the userBreaks Set inside the composition so the renderer's
   // grouper produces the same line splits the editor's captions list
@@ -108,7 +111,10 @@ export function CaptionsTimeline({ words, style, lineAnimations, lineStyles, wor
   // prop bridge doesn't serialise Set instances.
   const breaksSet =
     userBreaks && userBreaks.length > 0 ? new Set(userBreaks) : undefined;
-  const lines = groupWordsIntoLines(words, { userBreaks: breaksSet });
+  const lines = groupWordsIntoLines(words, {
+    userBreaks: breaksSet,
+    mode: captionMode,
+  });
 
   return (
     <AbsoluteFill style={{ backgroundColor: "transparent" }}>

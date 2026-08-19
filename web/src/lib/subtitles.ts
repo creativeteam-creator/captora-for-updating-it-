@@ -21,6 +21,9 @@ interface Options {
   /** Max words per line — passed to the grouper. Falls back to the
    *  grouper's default. */
   maxWordsPerLine?: number;
+  /** Grouping mode — "phrase" (default) or "sentence" (whole-sentence
+   *  per line). Mirror of the editor's captionMode. */
+  mode?: "phrase" | "sentence";
 }
 
 /** Format a seconds float as SRT timestamp "HH:MM:SS,mmm". */
@@ -48,6 +51,7 @@ export function whisperWordsToSrt(
   const lines = groupWordsIntoLines(words, {
     userBreaks: opts.userBreaks,
     maxWordsPerLine: opts.maxWordsPerLine,
+    mode: opts.mode,
   });
   return lines
     .map((line, i) => {
@@ -67,6 +71,7 @@ export function whisperWordsToVtt(
   const lines = groupWordsIntoLines(words, {
     userBreaks: opts.userBreaks,
     maxWordsPerLine: opts.maxWordsPerLine,
+    mode: opts.mode,
   });
   const body = lines
     .map((line) => {
