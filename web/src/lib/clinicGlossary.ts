@@ -131,8 +131,18 @@ export const CLINIC_GLOSSARY: Record<string, string> = {
   "dr":               "Dr.",
   "doktar":           "Doctor",
   "doaktar":          "Doctor",
-  "sar":              "sir",
   "madem":            "madam",
+  // NOTE: do not add "sar" → "sir" here. It was here briefly to fix STT
+  // mishearing "sir" as "sar" in English-context sentences, but "sar"
+  // (सर) is also the ordinary Hindi word for "head" — extremely common
+  // in hair-transplant content ("sar ke baal", "sar ki skin", "sar par
+  // graft"). A blind word-boundary replacement has no way to tell the
+  // two apart, so it was silently turning "head" into "sir" throughout
+  // captions on exactly the content this clinic makes most of. Any
+  // future fix for the "sir" mishearing needs sentence-level context
+  // (the LLM polish prompt is the right place — it can actually tell
+  // "sar, treatment achi rahegi" from "sar ke baal ghane honge"), not a
+  // flat find-and-replace table.
 };
 
 /**
