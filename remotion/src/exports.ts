@@ -8,6 +8,13 @@ export { CleanMedical } from "./compositions/CleanMedical";
 export { TechMinimal } from "./compositions/TechMinimal";
 export type { CaptionsCompositionProps, WhisperWord } from "./types";
 export {
+  CAPTION_STYLES,
+  rgbToCss,
+  type CaptionStyleId,
+  type RGB,
+  type CaptionStyle,
+} from "./styles";
+export {
   ENTRANCE_VARIANT_CYCLE,
   DEFAULT_WORD_ENTRANCE_CYCLE,
   type EntranceVariant,

@@ -1,7 +1,25 @@
 /**
- * Mirror of `web/src/lib/styles.ts`. Kept duplicated rather than imported
- * across workspaces to avoid pulling Next.js / web-only deps into the
- * Remotion bundle. If you change presets, update both files.
+ * Caption style presets — single source of truth.
+ *
+ * This used to be duplicated verbatim in `web/src/lib/styles.ts`, kept
+ * separate on the theory that importing it would pull Next.js / web-only
+ * deps into the Remotion bundle. That theory didn't hold: this file has
+ * zero framework imports (it's plain types + data), and the web app
+ * already imports far heavier things from this package — `BoldViral`
+ * itself, a full render composition, for the live editor Player preview
+ * (see web/src/components/CaptionPreview.tsx). Nothing extra was ever
+ * being avoided; the file was just being hand-copied on every edit,
+ * which is what let the two drift — 12 of 35 templates were missing
+ * their `isNew` badge on the web side's twin before this became the one
+ * copy that exists.
+ *
+ * `web/src/lib/styles.ts` re-exports `CaptionStyleId` / `RGB` /
+ * `CaptionStyle` / `CAPTION_STYLES` / `rgbToCss` from this file via
+ * `@captora/remotion` and adds only what's genuinely web-only on top:
+ * `CaptionStyleOverrides`, `DEFAULT_STYLE`, the `TemplateCategory`
+ * grouping, `applyStyleOverrides`, and the hex⇄RGB colour-picker helpers.
+ * A template added here is automatically available to both sides — there
+ * is no second file to remember to update.
  *
  * Visual variants are driven by *declarative* fields (textCase, glowOnActive,
  * boxBackground, highlightGradient) rather than `style.id` checks inside
@@ -327,6 +345,7 @@ export const CAPTION_STYLES: Record<CaptionStyleId, CaptionStyle> = {
   "captora-glow": {
     id: "captora-glow",
     label: "Captora Glow",
+    isNew: true,
     baseColor: [1, 1, 1],
     // Captora's signature emerald-green
     highlightColor: [0.43, 0.85, 0.30],
@@ -342,6 +361,7 @@ export const CAPTION_STYLES: Record<CaptionStyleId, CaptionStyle> = {
   "captora-shadow": {
     id: "captora-shadow",
     label: "Captora Shadow",
+    isNew: true,
     baseColor: [1, 1, 1],
     highlightColor: [1.0, 0.55, 0.0],
     popInDurationSec: 0.14,
@@ -385,6 +405,7 @@ export const CAPTION_STYLES: Record<CaptionStyleId, CaptionStyle> = {
   "tiktok-top": {
     id: "tiktok-top",
     label: "TikTok Top",
+    isNew: true,
     baseColor: [1, 1, 1],
     highlightColor: [1.0, 0.95, 0.0],
     popInDurationSec: 0.10,
@@ -398,6 +419,7 @@ export const CAPTION_STYLES: Record<CaptionStyleId, CaptionStyle> = {
   "caption-bottom": {
     id: "caption-bottom",
     label: "Caption Bottom",
+    isNew: true,
     baseColor: [1, 1, 1],
     highlightColor: [1, 1, 1],
     popInDurationSec: 0.18,
@@ -411,6 +433,7 @@ export const CAPTION_STYLES: Record<CaptionStyleId, CaptionStyle> = {
   "center-power": {
     id: "center-power",
     label: "Center Power",
+    isNew: true,
     baseColor: [1, 1, 1],
     highlightColor: [1.0, 0.20, 0.55],
     popInDurationSec: 0.12,
@@ -424,6 +447,7 @@ export const CAPTION_STYLES: Record<CaptionStyleId, CaptionStyle> = {
   "word-chips": {
     id: "word-chips",
     label: "Word Chips",
+    isNew: true,
     baseColor: [0.95, 0.95, 0.95],
     highlightColor: [0.43, 0.85, 0.30],
     popInDurationSec: 0.14,
@@ -439,6 +463,7 @@ export const CAPTION_STYLES: Record<CaptionStyleId, CaptionStyle> = {
   "bouncy-mix": {
     id: "bouncy-mix",
     label: "Bouncy Mix",
+    isNew: true,
     baseColor: [1, 1, 1],
     highlightColor: [0.20, 0.85, 1.0],
     popInDurationSec: 0.12,
@@ -459,6 +484,7 @@ export const CAPTION_STYLES: Record<CaptionStyleId, CaptionStyle> = {
   "kinetic-pop": {
     id: "kinetic-pop",
     label: "Kinetic Pop",
+    isNew: true,
     baseColor: [1, 1, 1],
     highlightColor: [1.0, 0.92, 0.0],
     popInDurationSec: 0.10,
@@ -475,6 +501,7 @@ export const CAPTION_STYLES: Record<CaptionStyleId, CaptionStyle> = {
   "slide-cascade": {
     id: "slide-cascade",
     label: "Slide Cascade",
+    isNew: true,
     baseColor: [1, 1, 1],
     highlightColor: [0.43, 0.85, 0.30],
     popInDurationSec: 0.10,
@@ -492,6 +519,7 @@ export const CAPTION_STYLES: Record<CaptionStyleId, CaptionStyle> = {
   "blur-reveal": {
     id: "blur-reveal",
     label: "Blur Reveal",
+    isNew: true,
     baseColor: [1, 1, 1],
     highlightColor: [1.0, 0.95, 0.85],
     popInDurationSec: 0.18,
@@ -507,6 +535,7 @@ export const CAPTION_STYLES: Record<CaptionStyleId, CaptionStyle> = {
   "drop-stack": {
     id: "drop-stack",
     label: "Drop Stack",
+    isNew: true,
     baseColor: [1, 1, 1],
     highlightColor: [1.0, 0.20, 0.55],
     popInDurationSec: 0.12,
@@ -523,6 +552,7 @@ export const CAPTION_STYLES: Record<CaptionStyleId, CaptionStyle> = {
   "rotate-flair": {
     id: "rotate-flair",
     label: "Rotate Flair",
+    isNew: true,
     baseColor: [0.95, 0.95, 0.95],
     highlightColor: [0.43, 0.85, 0.30],
     popInDurationSec: 0.14,
