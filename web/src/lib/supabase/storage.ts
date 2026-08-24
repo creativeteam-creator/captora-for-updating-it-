@@ -86,17 +86,6 @@ async function uploadBlob(
   return { path };
 }
 
-export async function uploadSource(
-  supabase: Sb,
-  userId: string,
-  projectId: string,
-  ext: string,
-  body: Blob | Buffer,
-  contentType: string
-): Promise<UploadResult> {
-  return uploadBlob(supabase, SOURCE_BUCKET, sourcePath(userId, projectId, ext), body, contentType);
-}
-
 export async function uploadRender(
   supabase: Sb,
   userId: string,
@@ -147,28 +136,6 @@ export async function signedUrl(
     return null;
   }
   return data.signedUrl;
-}
-
-/** Download an object from a bucket as a Buffer. */
-export async function downloadAsBuffer(
-  supabase: Sb,
-  bucket: string,
-  path: string
-): Promise<Buffer> {
-  const { data, error } = await supabase.storage.from(bucket).download(path);
-  if (error || !data) throw new Error(`storage download (${bucket}/${path}): ${error?.message ?? "no data"}`);
-  return Buffer.from(await data.arrayBuffer());
-}
-
-/** Best-effort delete — used when a project row goes away. */
-export async function removeObjects(
-  supabase: Sb,
-  bucket: string,
-  paths: string[]
-): Promise<void> {
-  if (paths.length === 0) return;
-  const { error } = await supabase.storage.from(bucket).remove(paths);
-  if (error) console.warn(`[storage] remove failed (${bucket}):`, error.message);
 }
 
 /**

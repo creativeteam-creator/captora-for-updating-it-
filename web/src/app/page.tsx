@@ -24,6 +24,7 @@ import {
   type CaptionStyleId,
   type CaptionStyleOverrides,
 } from "@/lib/styles";
+import { applyCaptionTrim } from "@/lib/captions";
 import { useUser, userInitials } from "@/lib/useUser";
 import type { WhisperWord } from "@/lib/whisper";
 import { listUserFonts, fontFaceCss, type UserFont } from "@/lib/userFonts";
@@ -46,6 +47,19 @@ type Status =
   | { kind: "rendered"; project: ProjectRecord; file: File; downloadUrl: string }
   | { kind: "error"; message: string };
 
+/**
+ * One point-in-time copy of everything the editor lets a user change.
+ *
+ * Every piece of editable state belongs here. The five fields below the
+ * original seven were missing, so Ctrl+Z appeared to work while quietly
+ * skipping the edit the user had just made: resizing a word, splitting a
+ * line, flipping the grouping mode, or marking an IN/OUT point left no
+ * entry to restore, and the undo landed on some earlier, unrelated
+ * change instead.
+ *
+ * When adding editor state, add it here too — the snapshot is what makes
+ * an edit undoable.
+ */
 type EditorSnapshot = {
   styleId: CaptionStyleId;
   overrides: CaptionStyleOverrides;
@@ -54,6 +68,13 @@ type EditorSnapshot = {
   lineStyles: Record<string, CaptionStyleId>;
   lineOverrides: Record<string, CaptionStyleOverrides>;
   transparent: boolean;
+  wordSizes: Record<string, number>;
+  /** Copied on capture — a Set stored by reference would be mutated in
+   *  place by a later edit and silently rewrite this history entry. */
+  userBreaks: Set<number>;
+  captionMode: "phrase" | "sentence";
+  captionInSec: number | null;
+  captionOutSec: number | null;
 };
 
 export default function Home() {
@@ -139,8 +160,17 @@ export default function Home() {
       lineStyles,
       lineOverrides,
       transparent,
+      wordSizes,
+      userBreaks: new Set(userBreaks),
+      captionMode,
+      captionInSec,
+      captionOutSec,
     }),
-    [styleId, overrides, editedWords, lineAnimations, lineStyles, lineOverrides, transparent]
+    [
+      styleId, overrides, editedWords, lineAnimations, lineStyles,
+      lineOverrides, transparent, wordSizes, userBreaks, captionMode,
+      captionInSec, captionOutSec,
+    ]
   );
 
   const applyEditorSnapshot = useCallback((snapshot: EditorSnapshot) => {
@@ -151,6 +181,14 @@ export default function Home() {
     setLineStyles(snapshot.lineStyles);
     setLineOverrides(snapshot.lineOverrides);
     setTransparent(snapshot.transparent);
+    setWordSizes(snapshot.wordSizes);
+    // Restore a copy: the snapshot stays on the undo/redo stack and may
+    // be applied again, so handing out its own Set would let a later
+    // edit mutate the history entry.
+    setUserBreaks(new Set(snapshot.userBreaks));
+    setCaptionMode(snapshot.captionMode);
+    setCaptionInSec(snapshot.captionInSec);
+    setCaptionOutSec(snapshot.captionOutSec);
   }, []);
 
   // Mirror stack lengths as state so the UI can show enabled/disabled
@@ -609,11 +647,17 @@ export default function Home() {
       // point or after the OUT point. The video track still plays for
       // the full duration; only the captions overlay is masked to the
       // chosen slice. `null` on either side = no trim on that end.
-      const wordsForRender = rawWordsForRender.filter((w) => {
-        if (captionInSec != null && w.start < captionInSec) return false;
-        if (captionOutSec != null && w.start > captionOutSec) return false;
-        return true;
-      });
+      //
+      // The forced line breaks are remapped in the same pass — they
+      // index into the word array, so trimming words without shifting
+      // them moved every split onto the wrong word.
+      const { words: wordsForRender, userBreaks: breaksForRender } =
+        applyCaptionTrim(
+          rawWordsForRender,
+          userBreaks,
+          captionInSec,
+          captionOutSec
+        );
       // Send only the fonts whose URLs resolved — render Chromium needs
       // a downloadable URL to inject @font-face. Fonts without URLs are
       // recently-uploaded ones whose signed URL hasn't loaded yet.
@@ -636,11 +680,15 @@ export default function Home() {
           height: canvasDims.height,
           lineAnimations,
           lineStyles: computedLineStyles,
-          // Serialise the userBreaks Set as an array for transport —
-          // /api/render reads it back into the composition inputProps
-          // so the rendered MP4 honours the same line splits the
-          // captions list displays in the editor.
-          userBreaks: Array.from(userBreaks),
+          // Per-word size multipliers. The preview has always honoured
+          // these; without sending them here the exported MP4 silently
+          // rendered every word at the line's base size instead.
+          wordSizes,
+          // Already an array, and already remapped onto `wordsForRender`
+          // by applyCaptionTrim above — /api/render reads it back into
+          // the composition inputProps so the rendered MP4 honours the
+          // same line splits the captions list displays in the editor.
+          userBreaks: breaksForRender,
           // Caption grouping mode — "phrase" default, or "sentence"
           // for whole-sentence-per-line rendering. Preview + MP4 both
           // consume this via CaptionsTimeline.
@@ -886,9 +934,20 @@ export default function Home() {
           onPickTemplate={onPickTemplate}
           onClearLineStyle={onClearLineStyle}
           wordSizes={wordSizes}
-          onWordSizesChange={setWordSizes}
+          // Both of these were wired straight to their setter, so the
+          // edit landed without ever pushing an undo entry — which is
+          // the other half of why Ctrl+Z skipped word resizes and line
+          // splits. Snapshot first, then apply, same as every other
+          // editor mutation.
+          onWordSizesChange={(next) => {
+            recordEditorChange();
+            setWordSizes(next);
+          }}
           userBreaks={userBreaks}
-          onUserBreaksChange={setUserBreaks}
+          onUserBreaksChange={(next) => {
+            recordEditorChange();
+            setUserBreaks(next);
+          }}
           captionInSec={captionInSec}
           captionOutSec={captionOutSec}
           onCaptionRangeChange={(inSec, outSec) => {

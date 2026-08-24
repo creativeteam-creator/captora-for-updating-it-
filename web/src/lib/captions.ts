@@ -48,6 +48,49 @@ const DEFAULT_OPTS: Required<Omit<GroupOptions, "userBreaks" | "mode">> = {
   maxDurationSec: 3.0,
 };
 
+/**
+ * Apply the caption IN/OUT trim to a word list AND remap the user's
+ * forced line breaks onto the surviving words.
+ *
+ * The trim and the breaks have to move together. `userBreaks` holds
+ * indexes into the FULL word array, but everything downstream — the
+ * preview, the render, the SRT export — receives the FILTERED array.
+ * Filtering the words while passing the original indexes through means
+ * every break lands on whatever word happens to sit at that position
+ * after the shift, so setting an IN point silently scattered the user's
+ * line splits across unrelated words.
+ *
+ * A break marks "start a new line after word i". When word i is trimmed
+ * away the break has nothing left to attach to, so it is dropped rather
+ * than slid onto a neighbour — a split the user placed at a specific
+ * word shouldn't reappear somewhere they didn't choose.
+ *
+ * `null` on either endpoint means "no trim on that end", which makes the
+ * no-trim case a plain copy with the breaks unchanged.
+ */
+export function applyCaptionTrim(
+  words: WhisperWord[],
+  userBreaks: Iterable<number> | undefined,
+  inSec: number | null | undefined,
+  outSec: number | null | undefined
+): { words: WhisperWord[]; userBreaks: number[] } {
+  const breakSet = userBreaks instanceof Set ? userBreaks : new Set(userBreaks ?? []);
+  const keptWords: WhisperWord[] = [];
+  const keptBreaks: number[] = [];
+
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i];
+    if (inSec != null && w.start < inSec) continue;
+    if (outSec != null && w.start > outSec) continue;
+    // Record the break at this word's NEW index before pushing it, so
+    // the stored value indexes into `keptWords`, not the source array.
+    if (breakSet.has(i)) keptBreaks.push(keptWords.length);
+    keptWords.push(w);
+  }
+
+  return { words: keptWords, userBreaks: keptBreaks };
+}
+
 export function groupWordsIntoLines(
   words: WhisperWord[],
   opts: GroupOptions = {}

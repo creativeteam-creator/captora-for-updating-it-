@@ -18,6 +18,7 @@ import {
 import { downloadToFile } from "@/lib/supabase/storage-server";
 import { isDesktopMode, getLocalSessionsDir } from "@/lib/captora-mode";
 import { getUserApiKeys } from "@/lib/userApiKeys";
+import { getUserGlossary } from "@/lib/userGlossary";
 import { withRequestContext } from "@/lib/requestContext";
 import { reportServerEvent } from "@/lib/telemetry-server";
 import { isValidProjectId, safeMediaExt } from "@/lib/pathSafety";
@@ -305,6 +306,20 @@ export async function POST(req: NextRequest) {
         `[/api/transcribe] user keys: gemini=${userKeys.geminiApiKey ? "user-set" : "bundled"} groq=${userKeys.groqApiKey ? "user-set" : "bundled"}`
       );
 
+      // ───── Resolve the user's caption corrections ─────
+      // Every word the user fixes in the captions list is POSTed to
+      // /api/glossary. Reading those back here is what turns a one-off
+      // correction into a permanent one: the same mishearing gets fixed
+      // automatically on their next video. Rides the request context so
+      // the transliteration code deep in the call tree can apply it
+      // without the glossary being threaded through every signature.
+      const userGlossary = await getUserGlossary(supabase, user.id);
+      if (Object.keys(userGlossary).length > 0) {
+        console.log(
+          `[/api/transcribe] loaded ${Object.keys(userGlossary).length} user glossary correction(s)`
+        );
+      }
+
       // ───── Transcribe ─────
       // `requestWarnings` collects any structured notes the downstream
       // pipeline pushes — primarily quota-exhausted entries from
@@ -320,6 +335,7 @@ export async function POST(req: NextRequest) {
             groqApiKey: userKeys.groqApiKey,
           },
           warnings: requestWarnings,
+          userGlossary,
         },
         () =>
           transcribe({

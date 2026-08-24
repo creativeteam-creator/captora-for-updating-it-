@@ -65,24 +65,35 @@ async function readSupabaseGlossary(userId: string): Promise<Record<string, stri
   return entries;
 }
 
+/**
+ * Both writers throw on a Supabase error instead of ignoring it.
+ *
+ * They used to discard the result entirely, which is how the missing
+ * `user_glossary` table went unnoticed for so long: every save returned
+ * `{ ok: true }` to a UI that had no way to know the row went nowhere.
+ * A write that fails should say so — the caller turns it into a 500, and
+ * the server log names the cause.
+ */
 async function upsertSupabaseGlossary(
   userId: string, from: string, to: string
 ): Promise<void> {
   const supabase = await createClient();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const sb: any = supabase;
-  await sb.from("user_glossary").upsert(
+  const { error } = await sb.from("user_glossary").upsert(
     { user_id: userId, from_word: from, to_word: to },
     { onConflict: "user_id,from_word" }
   );
+  if (error) throw new Error(`glossary upsert failed: ${error.message}`);
 }
 
 async function deleteSupabaseGlossary(userId: string, from: string): Promise<void> {
   const supabase = await createClient();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const sb: any = supabase;
-  await sb.from("user_glossary").delete()
+  const { error } = await sb.from("user_glossary").delete()
     .eq("user_id", userId).eq("from_word", from);
+  if (error) throw new Error(`glossary delete failed: ${error.message}`);
 }
 
 // ── Route handlers ───────────────────────────────────────────────────────────

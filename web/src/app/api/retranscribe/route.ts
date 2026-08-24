@@ -11,6 +11,7 @@ import { SOURCE_BUCKET } from "@/lib/supabase/storage";
 import { downloadToFile } from "@/lib/supabase/storage-server";
 import { isDesktopMode, getLocalSessionsDir } from "@/lib/captora-mode";
 import { getUserApiKeys } from "@/lib/userApiKeys";
+import { getUserGlossary } from "@/lib/userGlossary";
 import { withRequestContext } from "@/lib/requestContext";
 import { reportServerEvent } from "@/lib/telemetry-server";
 
@@ -179,6 +180,17 @@ export async function POST(req: NextRequest) {
         `[/api/retranscribe] user keys: gemini=${userKeys.geminiApiKey ? "user-set" : "bundled"} groq=${userKeys.groqApiKey ? "user-set" : "bundled"}`
       );
 
+      // ───── Resolve the user's caption corrections ─────
+      // Same reasoning as /api/transcribe: a re-transcribe discards the
+      // user's manual word edits by design, so their saved glossary is
+      // the only thing carrying those corrections into the fresh pass.
+      const userGlossary = await getUserGlossary(supabase, user.id);
+      if (Object.keys(userGlossary).length > 0) {
+        console.log(
+          `[/api/retranscribe] loaded ${Object.keys(userGlossary).length} user glossary correction(s)`
+        );
+      }
+
       // ───── Transcribe (same pipeline as first-time) ─────
       const t0 = Date.now();
       const requestWarnings: import("@/lib/requestContext").RequestWarning[] = [];
@@ -189,6 +201,7 @@ export async function POST(req: NextRequest) {
             groqApiKey: userKeys.groqApiKey,
           },
           warnings: requestWarnings,
+          userGlossary,
         },
         () =>
           transcribe({

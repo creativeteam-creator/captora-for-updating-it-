@@ -8,6 +8,7 @@
  *
  * Currently carries:
  *   - keyOverrides: user-supplied Gemini / Groq API keys (Settings panel)
+ *   - userGlossary: the user's own caption corrections (captions list)
  *
  * If the field is null/empty, callers fall back to the bundled key from
  * process.env (the production .env.production written by GitHub Actions).
@@ -38,6 +39,17 @@ export interface RequestWarning {
 export interface RequestCtx {
   keyOverrides: RequestKeyOverrides;
   warnings: RequestWarning[];
+  /**
+   * The signed-in user's own caption corrections, lowercased key →
+   * replacement (see lib/userGlossary.ts). Rides the context for the
+   * same reason the keys do: the glossary is applied deep inside the
+   * transliteration code, several calls below the route that knows who
+   * the user is.
+   *
+   * Optional so existing callers that build a context without it still
+   * type-check; readers treat `undefined` as "no user corrections".
+   */
+  userGlossary?: Record<string, string>;
 }
 
 const storage = new AsyncLocalStorage<RequestCtx>();
@@ -72,6 +84,13 @@ export function resolveKey(
     return { key: userKey.trim(), userOwned: true };
   }
   return { key: envDefault, userOwned: false };
+}
+
+/** Read the active request's user glossary. Returns `{}` outside a
+ *  request context and for users who've never corrected a word, so
+ *  callers can merge it unconditionally. */
+export function resolveUserGlossary(): Record<string, string> {
+  return getRequestContext()?.userGlossary ?? {};
 }
 
 /** Append a warning to the active request. No-op outside a request

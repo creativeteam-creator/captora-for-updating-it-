@@ -100,4 +100,16 @@ export interface CaptionsCompositionProps {
    * pause / word-count / duration heuristics only.
    */
   userBreaks?: number[];
+  /**
+   * Caption grouping mode — "phrase" (default 3-6 word chunks) or
+   * "sentence" (whole sentence per line). Mirrors the editor's
+   * Captions-panel toggle so the preview and the rendered MP4 group
+   * lines exactly the way the captions list displays them.
+   *
+   * This field was missing while every caller already passed the value,
+   * so `captionMode` reached the compositions' props object and was
+   * dropped on the floor — sentence mode worked in the captions list
+   * and the SRT export but never in the preview or the export.
+   */
+  captionMode?: "phrase" | "sentence";
 }

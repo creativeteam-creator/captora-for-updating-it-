@@ -15,7 +15,7 @@ import { readFile } from "fs/promises";
 import { existsSync } from "fs";
 import { join } from "path";
 import { indicToRoman } from "./script";
-import { resolveKey, pushWarning } from "./requestContext";
+import { resolveKey, pushWarning, resolveUserGlossary } from "./requestContext";
 
 // ── Provider configuration ───────────────────────────────────────────────
 
@@ -130,24 +130,34 @@ function pickBatchSize(p: ProviderInfo): number {
 // Path to user-corrections glossary (written by /api/glossary)
 const GLOSSARY_PATH = join(process.cwd(), "glossary.json");
 
-/** Read the local glossary.json (user corrections from caption editor),
- *  MERGED with the built-in clinic glossary so QHT terms + common
- *  medical mishearings are always corrected even when the user hasn't
- *  added their own entries. User entries win on collision. */
+/** Collect every glossary layer, most general first so the more specific
+ *  ones override it:
+ *
+ *    clinic glossary  → built-in QHT terms + medical mishearings
+ *    glossary.json    → the DEV-mode local file (`/api/glossary` writes
+ *                       here only when NODE_ENV=development)
+ *    user_glossary    → the signed-in user's own corrections, read from
+ *                       Supabase by the route and carried on the request
+ *                       context
+ *
+ *  The Supabase layer is what makes a correction stick in production.
+ *  Before it, this function read only the local JSON file — which the
+ *  deployed build never writes — so every correction a user made in the
+ *  captions list was applied to that one project and then forgotten. */
 async function readLocalGlossary(): Promise<Record<string, string>> {
-  let userEntries: Record<string, string> = {};
+  let fileEntries: Record<string, string> = {};
   try {
     if (existsSync(GLOSSARY_PATH)) {
       const raw = await readFile(GLOSSARY_PATH, "utf-8");
-      userEntries = JSON.parse(raw) as Record<string, string>;
+      fileEntries = JSON.parse(raw) as Record<string, string>;
     }
   } catch {
-    userEntries = {};
+    fileEntries = {};
   }
   // Late import to avoid a circular dep if any glossary consumer
   // eventually re-imports hinglish-llm.
   const { mergeWithClinicGlossary } = await import("./clinicGlossary");
-  return mergeWithClinicGlossary(userEntries);
+  return mergeWithClinicGlossary({ ...fileEntries, ...resolveUserGlossary() });
 }
 
 /**

@@ -218,6 +218,14 @@ interface RenderBody {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   lineStyles?: Record<string, any>;
   /**
+   * Per-word fontSize multipliers keyed by centisecond start time —
+   * same key convention as `lineAnimations` / `lineStyles`. 1.0 = the
+   * line's own fontSize, 1.5 = 150%. Forwarded into the composition so
+   * a word the user enlarged in the editor is enlarged in the MP4 too;
+   * without it the preview and the export disagree.
+   */
+  wordSizes?: Record<string, number>;
+  /**
    * User-forced line breaks: indexes in `words[]` after which the
    * captions grouper must start a new line. Arrived as `number[]`
    * (Set is not JSON-serialisable). Forwarded straight into the
@@ -289,7 +297,7 @@ export async function POST(req: NextRequest) {
 
     // ───── Parse + validate body ─────
     const body = (await req.json()) as RenderBody;
-    const { projectId, style, words, durationSec, computedStyle, transparent, customFonts, width, height, lineAnimations, lineStyles, userBreaks, captionMode } = body;
+    const { projectId, style, words, durationSec, computedStyle, transparent, customFonts, width, height, lineAnimations, lineStyles, wordSizes, userBreaks, captionMode } = body;
     if (!projectId || !body.ext || !style || !Array.isArray(words)) {
       return NextResponse.json(
         { ok: false, error: "Missing required fields: projectId, ext, style, words" },
@@ -404,6 +412,13 @@ export async function POST(req: NextRequest) {
       lineStyles:
         lineStyles && typeof lineStyles === "object" && Object.keys(lineStyles).length > 0
           ? lineStyles
+          : undefined,
+      // Per-word size multipliers. Same empty-object-is-omitted rule as
+      // the two maps above, so a project with no per-word tweaks sends
+      // nothing and the composition uses each line's own fontSize.
+      wordSizes:
+        wordSizes && typeof wordSizes === "object" && Object.keys(wordSizes).length > 0
+          ? wordSizes
           : undefined,
       // User-forced line breaks (Item 4). Arrives as a number[]; the
       // composition rebuilds the Set inside CaptionsTimeline before

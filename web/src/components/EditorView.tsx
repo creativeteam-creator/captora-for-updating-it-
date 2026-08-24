@@ -12,7 +12,7 @@
  * style is what the preview and /api/render both consume.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { PlayerRef } from "@remotion/player";
 import { CaptionPreview } from "./CaptionPreview";
 import { CaptionsList } from "./CaptionsList";
@@ -26,6 +26,7 @@ import {
   type CaptionStyleId,
   type CaptionStyleOverrides,
 } from "@/lib/styles";
+import { applyCaptionTrim } from "@/lib/captions";
 import type { ProjectRecord } from "@/lib/projects";
 import type { WhisperWord } from "@/lib/whisper";
 import type { UserFont } from "@/lib/userFonts";
@@ -153,6 +154,17 @@ export function EditorView({
   wordSizes, onWordSizesChange,
   userBreaks, onUserBreaksChange,
 }: Props) {
+  // Words + forced line breaks after the caption IN/OUT trim. Computed
+  // once here rather than inline at the preview so the two always move
+  // together: `userBreaks` indexes into the word array, so a trim that
+  // drops words without remapping the breaks slides every split onto a
+  // different word. page.tsx runs the same helper for the render, which
+  // is what keeps the preview and the exported MP4 in agreement.
+  const trimmed = useMemo(
+    () => applyCaptionTrim(words, userBreaks, captionInSec, captionOutSec),
+    [words, userBreaks, captionInSec, captionOutSec]
+  );
+
   // Single point that handles per-line variant edits. Setting a variant
   // adds/replaces the key; passing `null` removes it (resetting that
   // line back to the cyclic default).
@@ -610,13 +622,11 @@ export function EditorView({
               style={styleId}
               computedStyle={computedStyle}
               // Apply IN/OUT trim to the preview so what the user sees
-              // is what the exported MP4 will contain. Same filter the
-              // render request uses in page.tsx.
-              words={words.filter((w) => {
-                if (captionInSec != null && w.start < captionInSec) return false;
-                if (captionOutSec != null && w.start > captionOutSec) return false;
-                return true;
-              })}
+              // is what the exported MP4 will contain. Same helper the
+              // render request uses in page.tsx — words and forced line
+              // breaks are trimmed together so the splits stay on the
+              // words the user put them on.
+              words={trimmed.words}
               durationSec={project.whisper.duration}
               userFonts={userFonts}
               width={canvasWidth}
@@ -624,7 +634,7 @@ export function EditorView({
               lineAnimations={lineAnimations}
               lineStyles={computedLineStyles}
               wordSizes={wordSizes}
-              userBreaks={Array.from(userBreaks)}
+              userBreaks={trimmed.userBreaks}
               captionMode={captionMode}
               playerRef={playerRef}
               dragModeActive={dragModeActive}

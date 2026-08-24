@@ -7,7 +7,7 @@ import { resolveSrc } from "../lib/resolveSrc";
 import { CaptionsCompositionProps } from "../types";
 
 export const BoldViral: React.FC<CaptionsCompositionProps> = ({
-  words, videoSrc, audioSrc, style, transparentBackground, customFonts, lineAnimations, lineStyles, wordSizes, userBreaks,
+  words, videoSrc, audioSrc, style, transparentBackground, customFonts, lineAnimations, lineStyles, wordSizes, userBreaks, captionMode,
 }) => {
   const finalStyle = style ?? CAPTION_STYLES["bold-viral"];
   // Transparent renders skip the source video too — the user wants a
@@ -30,6 +30,7 @@ export const BoldViral: React.FC<CaptionsCompositionProps> = ({
         lineStyles={lineStyles}
         wordSizes={wordSizes}
         userBreaks={userBreaks}
+        captionMode={captionMode}
       />
     </AbsoluteFill>
   );

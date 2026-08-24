@@ -8,6 +8,7 @@
 
 import Sanscript from "@indic-transliteration/sanscript";
 import { getSanscriptScheme, type WritingScript } from "./languages";
+import { resolveUserGlossary } from "./requestContext";
 import type { WhisperWord } from "./whisper";
 
 export interface RomanizationContext {
@@ -365,11 +366,18 @@ export function polishRomanHindi(text: string): string {
 
 
 /**
- * Optional deployment glossary:
- *   CAPTORA_TRANSCRIPT_GLOSSARY="qhd=QHT, qht=QHT, haridur=Haridwar"
+ * Glossary layers applied after romanisation, least to most specific:
  *
- * This runs after romanisation and is the right place for recurring
- * clinic/brand/person/location words.
+ *   1. built-in clinic glossary  (QHT terms, medical mishearings)
+ *   2. CAPTORA_TRANSCRIPT_GLOSSARY="qhd=QHT, haridur=Haridwar"  (deployment)
+ *   3. the signed-in user's own corrections from the captions list
+ *
+ * Layer 3 is the reason this list is ordered at all. This is the
+ * optitrans fallback path — the one that runs when the Hinglish LLM is
+ * unavailable or every provider has tripped its daily quota — and it
+ * used to apply only layers 1 and 2. So on exactly the days the output
+ * needed the most help, a user's own corrections were the thing that
+ * went missing.
  */
 function applyGlossaryCorrections(text: string): string {
   let s = text;
@@ -401,6 +409,15 @@ function applyGlossaryCorrections(text: string): string {
       );
     }
   }
+
+  // The signed-in user's own corrections, last so they win over both
+  // the built-ins and the deployment glossary — the user corrected the
+  // word themselves, in this app, on their own content.
+  for (const [from, to] of Object.entries(resolveUserGlossary())) {
+    if (!from || !to) continue;
+    s = s.replace(new RegExp(`\\b${escapeRegExp(from)}\\b`, "gi"), to);
+  }
+
   return s;
 }
 
