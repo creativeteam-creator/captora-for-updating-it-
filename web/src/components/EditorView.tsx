@@ -29,14 +29,28 @@ import {
 import { applyCaptionTrim } from "@/lib/captions";
 import type { ProjectRecord } from "@/lib/projects";
 import type { WhisperWord } from "@/lib/whisper";
+import type { AccuracyTier } from "@/lib/whisper";
 import type { UserFont } from "@/lib/userFonts";
 import {
   whisperWordsToSrt,
   whisperWordsToVtt,
   downloadTextFile,
 } from "@/lib/subtitles";
+import {
+  SPOKEN_LANGUAGE_GROUPS,
+  WRITING_SCRIPTS,
+  getSpokenLanguage,
+  supportsRoman,
+  type WritingScript,
+} from "@/lib/languages";
 
 export type RightTab = "text" | "templates" | "transitions" | "audio";
+
+export interface RetranscribeOverrides {
+  accuracy?: AccuracyTier;
+  spokenLanguage?: string;
+  writingScript?: WritingScript;
+}
 
 interface Props {
   project: ProjectRecord;
@@ -109,8 +123,11 @@ interface Props {
   /** Kick off a fresh transcription pass on the same source file.
    *  Replaces the current transcript in place (destructive — any
    *  manual edits are lost). Optional: when absent, the button
-   *  hides. */
-  onRetranscribe?: () => void;
+   *  hides. `overrides` lets the user fix a wrong language/script/
+   *  accuracy pick before re-running — omitted fields keep the
+   *  project's original settings (the /api/retranscribe route already
+   *  supported this; only the UI to reach it was missing). */
+  onRetranscribe?: (overrides?: RetranscribeOverrides) => void;
   retranscribing?: boolean;
   /** Caption IN / OUT trim points in seconds — words outside this
    *  range are dropped from the render + preview. Set/clear via the
@@ -179,6 +196,30 @@ export function EditorView({
   };
   const [rightTab, setRightTab] = useState<RightTab>("templates");
   const [leftTab, setLeftTab] = useState<"captions" | "fonts" | "audio">("captions");
+  // Re-transcribe options panel. `/api/retranscribe` has always accepted
+  // accuracy/spokenLanguage/writingScript overrides, but the only way to
+  // reach it was a plain confirm() that silently reused whatever the
+  // project was first transcribed with — a user who picked the wrong
+  // language on upload had no way to fix it short of re-dropping the
+  // source file from Home and going through Prepare Media again. This
+  // exposes the same overrides the route already supports.
+  const [retranscribeOpen, setRetranscribeOpen] = useState(false);
+  const [rtLanguage, setRtLanguage] = useState(project.spokenLanguage);
+  const [rtScript, setRtScript] = useState<WritingScript>(project.writingScript);
+  const [rtAccuracy, setRtAccuracy] = useState<AccuracyTier>("balanced");
+  // EditorView is never remounted when `project` changes — page.tsx just
+  // mutates the same prop in place — so the useState initializers above
+  // only ever run once. Without this, a successful re-transcribe updates
+  // project.spokenLanguage/writingScript, but reopening this panel still
+  // showed the ORIGINAL language; running it again without manually
+  // re-picking would silently send the stale value and clobber the
+  // just-fixed language back to what it was before.
+  useEffect(() => {
+    setRtLanguage(project.spokenLanguage);
+    setRtScript(project.writingScript);
+  }, [project.spokenLanguage, project.writingScript]);
+  const rtLangInfo = getSpokenLanguage(rtLanguage);
+  const rtSupportsRoman = rtLangInfo ? supportsRoman(rtLangInfo) : false;
   // Player ref shared between CaptionPreview (sets it) and Timeline
   // (reads currentFrame + seeks). Created once per editor session so
   // its identity stays stable across re-renders.
@@ -491,18 +532,15 @@ export function EditorView({
             </div>
             {/* Re-transcribe — throws away current transcript + edits
                 and runs the STT pipeline again on the same source
-                file. Useful when the first pass had wrong words or the
-                user wants to try a different accuracy tier. Confirms
-                before firing (destructive). */}
+                file. Useful when the first pass had wrong words, or
+                when the language/script/accuracy picked at upload time
+                was wrong — the options panel below lets the user fix
+                those before firing instead of blindly re-running the
+                exact same settings. */}
             {onRetranscribe && (
               <button
                 type="button"
-                onClick={() => {
-                  const ok = window.confirm(
-                    "Re-transcribe this file? Your caption edits will be replaced with a fresh transcription."
-                  );
-                  if (ok) onRetranscribe();
-                }}
+                onClick={() => setRetranscribeOpen((v) => !v)}
                 disabled={retranscribing || exporting}
                 className="ml-2 flex items-center gap-1.5 rounded-md border border-[var(--border)] bg-[var(--bg-elevated)] px-2.5 py-1.5 text-[11px] text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)] disabled:opacity-50 disabled:cursor-not-allowed"
                 title="Re-run transcription on the same source file (replaces current transcript)"
@@ -525,6 +563,98 @@ export function EditorView({
               </button>
             )}
           </div>
+
+          {onRetranscribe && retranscribeOpen && (
+            <div className="mt-2 flex flex-wrap items-end gap-2 rounded-md border border-[var(--border)] bg-[var(--bg-elevated)] p-2.5">
+              <div className="space-y-1">
+                <div className="text-[10px] uppercase tracking-wide text-[var(--text-muted)]">Language</div>
+                <select
+                  value={rtLanguage}
+                  onChange={(e) => {
+                    setRtLanguage(e.target.value);
+                    const info = getSpokenLanguage(e.target.value);
+                    if (!info || !supportsRoman(info)) setRtScript("native");
+                  }}
+                  className="h-8 rounded-md border border-[var(--border)] bg-[var(--bg)] px-2 text-xs text-[var(--text)] focus:border-[var(--accent)] focus:outline-none"
+                >
+                  {SPOKEN_LANGUAGE_GROUPS.map((group) => (
+                    <optgroup key={group.label} label={group.label}>
+                      {group.languages.map((lang) => (
+                        <option key={lang.code} value={lang.code}>{lang.label}</option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+              </div>
+              {rtSupportsRoman && (
+                <div className="space-y-1">
+                  <div className="text-[10px] uppercase tracking-wide text-[var(--text-muted)]">Script</div>
+                  <div className="inline-flex rounded-md border border-[var(--border-subtle)] overflow-hidden">
+                    {(["native", "roman"] as const).map((s) => (
+                      <button
+                        key={s}
+                        type="button"
+                        onClick={() => setRtScript(s)}
+                        className={`px-2 py-1.5 text-[11px] ${
+                          rtScript === s
+                            ? "bg-[var(--accent)] text-black"
+                            : "text-[var(--text-muted)] hover:text-[var(--text)]"
+                        }`}
+                      >
+                        {WRITING_SCRIPTS[s].label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <div className="space-y-1">
+                <div className="text-[10px] uppercase tracking-wide text-[var(--text-muted)]">Accuracy</div>
+                <div className="inline-flex rounded-md border border-[var(--border-subtle)] overflow-hidden">
+                  {(["fast", "balanced", "best"] as const).map((a) => (
+                    <button
+                      key={a}
+                      type="button"
+                      onClick={() => setRtAccuracy(a)}
+                      className={`px-2 py-1.5 text-[11px] capitalize ${
+                        rtAccuracy === a
+                          ? "bg-[var(--accent)] text-black"
+                          : "text-[var(--text-muted)] hover:text-[var(--text)]"
+                      }`}
+                    >
+                      {a}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="ml-auto flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setRetranscribeOpen(false)}
+                  className="rounded-md border border-[var(--border)] bg-[var(--bg)] px-2.5 py-1.5 text-[11px] text-[var(--text-muted)] hover:text-[var(--text)]"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const ok = window.confirm(
+                      "Re-transcribe this file? Your caption edits will be replaced with a fresh transcription."
+                    );
+                    if (!ok) return;
+                    setRetranscribeOpen(false);
+                    onRetranscribe({
+                      accuracy: rtAccuracy,
+                      spokenLanguage: rtLanguage,
+                      writingScript: rtScript,
+                    });
+                  }}
+                  className="rounded-md border border-[var(--accent)] bg-[var(--accent)] px-2.5 py-1.5 text-[11px] font-semibold text-black hover:opacity-90"
+                >
+                  Run
+                </button>
+              </div>
+            </div>
+          )}
 
           <div className="flex items-center gap-2">
             {/* Transparent export toggle — flips the renderer to VP9/.webm
@@ -564,8 +694,13 @@ export function EditorView({
                 tiny "Subtitles" dropdown so it doesn't crowd the
                 header for users who never touch them. */}
             <SubtitlesDropdown
-              words={words}
-              userBreaks={userBreaks}
+              // Trimmed the same way the preview and the render are —
+              // otherwise a user who marked an IN point to hide intro
+              // captions from the exported MP4 would still find those
+              // same captions sitting in the downloaded .srt/.vtt,
+              // disagreeing with the video it's meant to accompany.
+              words={trimmed.words}
+              userBreaks={new Set(trimmed.userBreaks)}
               projectTitle={project.title}
               captionMode={captionMode}
             />
@@ -750,6 +885,9 @@ export function EditorView({
           captionInSec={captionInSec}
           captionOutSec={captionOutSec}
           onCaptionRangeChange={onCaptionRangeChange}
+          wordSizes={wordSizes}
+          onWordSizesChange={onWordSizesChange}
+          captionMode={captionMode}
         />
 
         {exportError && (

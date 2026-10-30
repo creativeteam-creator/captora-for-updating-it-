@@ -18,7 +18,7 @@
 import { useEffect, useRef, useState, useMemo } from "react";
 import type { PlayerRef } from "@remotion/player";
 import type { WhisperWord } from "@/lib/whisper";
-import { groupWordsIntoLines } from "@/lib/captions";
+import { groupWordsIntoLines, remapUserBreaksAfterSplice, lineKeysAreClose } from "@/lib/captions";
 import { decodePeaks } from "@/lib/waveform";
 import { extractFrames } from "@/lib/videoFrames";
 
@@ -68,6 +68,18 @@ interface Props {
     inSec: number | null,
     outSec: number | null
   ) => void;
+  /** Per-word fontSize multipliers keyed by `(word.start * 100) | 0`
+   *  centiseconds — same store CaptionsList reads/writes. Needed here
+   *  only to keep an override attached to its word when a left-edge
+   *  drag changes that word's start time (see `endDrag`); Timeline
+   *  itself has no size control of its own. */
+  wordSizes?: Record<string, number>;
+  onWordSizesChange?: (next: Record<string, number>) => void;
+  /** Caption grouping mode — "phrase" (default) or "sentence". Forwarded
+   *  into the "Line" chip mode's own `groupWordsIntoLines` call so its
+   *  pills match the captions panel and the actual render instead of
+   *  always grouping in the default phrase mode. */
+  captionMode?: "phrase" | "sentence";
 }
 
 const FPS_DEFAULT = 30;
@@ -119,6 +131,9 @@ export function Timeline({
   captionInSec,
   captionOutSec,
   onCaptionRangeChange,
+  wordSizes,
+  onWordSizesChange,
+  captionMode,
 }: Props) {
   const stripRef = useRef<HTMLDivElement>(null);
   const [currentSec, setCurrentSec] = useState(0);
@@ -325,8 +340,11 @@ export function Timeline({
   // sees on the left side.
   const [chipMode, setChipMode] = useState<ChipMode>("word");
   const lines = useMemo(
-    () => (chipMode === "line" ? groupWordsIntoLines(words) : []),
-    [chipMode, words]
+    () =>
+      chipMode === "line"
+        ? groupWordsIntoLines(words, { userBreaks, mode: captionMode })
+        : [],
+    [chipMode, words, userBreaks, captionMode]
   );
 
   // Drag-to-retime — track which word's edge is being dragged so the
@@ -388,8 +406,31 @@ export function Timeline({
   };
 
   const endDrag = (e: React.PointerEvent<HTMLSpanElement>) => {
-    if (dragRef.current) {
+    const drag = dragRef.current;
+    if (drag) {
       e.currentTarget.releasePointerCapture(e.pointerId);
+      // wordSizes (and per-line overrides elsewhere) are keyed by a
+      // word's START time in centiseconds. Only a left-edge drag moves
+      // that; a right-edge drag only changes `end`, which nothing is
+      // keyed by. Without this remap, resizing a word to 150% in the
+      // captions list and then dragging its left edge on the timeline
+      // silently reverted it to 100% — the override stayed registered
+      // under the OLD time, which no word occupies anymore — and if a
+      // different word later landed on exactly that old time, it would
+      // silently inherit the stale 150%.
+      if (drag.edge === "left" && onWordSizesChange && wordSizes) {
+        const finalWord = words[drag.wordIndex];
+        if (finalWord) {
+          const fromKey = String((drag.originSec * 100) | 0);
+          const toKey = String((finalWord.start * 100) | 0);
+          if (fromKey !== toKey && fromKey in wordSizes) {
+            const nextSizes = { ...wordSizes };
+            nextSizes[toKey] = nextSizes[fromKey];
+            delete nextSizes[fromKey];
+            onWordSizesChange(nextSizes);
+          }
+        }
+      }
       dragRef.current = null;
     }
   };
@@ -1028,6 +1069,12 @@ export function Timeline({
                 if (insertAt < 0) insertAt = next.length;
                 next.splice(insertAt, 0, newWord);
                 onWordsChange(next);
+                // Same index-shift problem as CaptionsList's word-insert:
+                // every forced break at or after `insertAt` needs to move
+                // up by one, or it silently lands on the wrong word.
+                if (onUserBreaksChange && userBreaks) {
+                  onUserBreaksChange(remapUserBreaksAfterSplice(userBreaks, insertAt, 0, 1));
+                }
               }}
               title={onWordsChange ? "Double-click to add a new word here" : undefined}
             >
@@ -1036,11 +1083,24 @@ export function Timeline({
                     const left = w.start * pxPerSec;
                     const width = Math.max(8, (w.end - w.start) * pxPerSec);
                     const isActive = activeWordIndex === i;
+                    // Same filter applyCaptionTrim uses for the actual
+                    // preview/export — a word outside [in, out] never
+                    // becomes a caption no matter what happens to it
+                    // here. Previously only a decorative overlay (itself
+                    // pointer-events-none, so purely visual) marked this
+                    // region; the chips underneath stayed fully
+                    // draggable/editable, so a user could retime or
+                    // rename a word here and never see it change
+                    // anything, with no indication why.
+                    const isTrimmedOut =
+                      (captionInSec != null && w.start < captionInSec) ||
+                      (captionOutSec != null && w.start > captionOutSec);
                     return (
                       <div
                         key={`${i}-${w.start}`}
-                        className="group absolute top-0.5 bottom-0.5"
+                        className={`group absolute top-0.5 bottom-0.5 ${isTrimmedOut ? "pointer-events-none opacity-40" : ""}`}
                         style={{ left: `${left}px`, width: `${width}px` }}
+                        title={isTrimmedOut ? "Outside the caption IN/OUT range — won't appear in the preview or export" : undefined}
                       >
                         {onWordsChange && (
                           <span
@@ -1132,7 +1192,12 @@ export function Timeline({
                     // by lineAnimations / lineStyles so the renderer
                     // and Templates panel agree on what "this line" is.
                     const key = String((lineStart * 100) | 0);
-                    const isSelected = selectedLineKey === key;
+                    // Fuzzy match: deleting this line's first word (or
+                    // any edit that shifts it) moves its own key, which
+                    // would otherwise silently drop the selection ring —
+                    // see lineKeysAreClose's doc comment.
+                    const isSelected =
+                      !!selectedLineKey && lineKeysAreClose(selectedLineKey, key);
                     const label = line.words.map((w) => w.word).join(" ");
                     return (
                       <button

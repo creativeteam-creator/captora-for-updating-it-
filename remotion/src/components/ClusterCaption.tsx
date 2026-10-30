@@ -98,8 +98,17 @@ export function ClusterCaption({
   // are the old counts divided by 30, so 30fps output is unchanged.
   const FADE_IN_SEC = 4 / 30;   // ~0.13s
   const FADE_OUT_SEC = 6 / 30;  // 0.20s
-  const fadeInFrames = Math.max(1, Math.round(FADE_IN_SEC * fps));
-  const fadeOutFrames = Math.max(1, Math.round(FADE_OUT_SEC * fps));
+  // Clamped against the phrase's own duration — the 0.1s duration floor
+  // above can leave phraseDurationFrames under the raw fade-in window
+  // (4 frames @30fps), which used to make `frame < fadeInFrames` true for
+  // the entire phrase and the opacity never reached 1 before the phrase
+  // ended. Capping fadeOutFrames to whatever's left after fade-in also
+  // keeps the two windows from overlapping.
+  const fadeInFrames = Math.max(1, Math.min(Math.round(FADE_IN_SEC * fps), phraseDurationFrames));
+  const fadeOutFrames = Math.max(
+    1,
+    Math.min(Math.round(FADE_OUT_SEC * fps), Math.max(1, phraseDurationFrames - fadeInFrames))
+  );
 
   const phraseOpacity = (() => {
     if (frame < fadeInFrames) return interpolate(frame, [0, fadeInFrames], [0, 1]);

@@ -16,6 +16,7 @@ import { readFile, stat, unlink } from "fs/promises";
 import { basename } from "path";
 import type { WhisperResult, WhisperWord } from "./whisper";
 import { extractAudioToMp3 } from "./audio-extract";
+import { WHISPER_ISO_CODE } from "./languages";
 
 const GROQ_BASE = "https://api.groq.com/openai/v1";
 
@@ -37,21 +38,9 @@ const GROQ_EXTRACT_BITRATE = "48k";
 /**
  * Map our spokenLanguage to Whisper's ISO 639-1 code. Groq accepts both
  * the full name ("english") and the code; codes are slightly more reliable
- * across providers, so we use them.
+ * across providers, so we use them. Shared table — see languages.ts.
  */
-const ISO_CODE: Record<string, string> = {
-  english: "en",       spanish: "es",     french: "fr",      german: "de",
-  italian: "it",       portuguese: "pt",  dutch: "nl",       russian: "ru",
-  ukrainian: "uk",     polish: "pl",      czech: "cs",       slovak: "sk",
-  hungarian: "hu",     romanian: "ro",    greek: "el",       turkish: "tr",
-  arabic: "ar",        hebrew: "he",      persian: "fa",     japanese: "ja",
-  korean: "ko",        chinese: "zh",     cantonese: "yue",  vietnamese: "vi",
-  thai: "th",          indonesian: "id",  malay: "ms",       tagalog: "tl",
-  swedish: "sv",       danish: "da",      norwegian: "no",   finnish: "fi",
-  hindi: "hi",         "hi-roman": "hi",  marathi: "mr",     bengali: "bn",
-  tamil: "ta",         telugu: "te",      kannada: "kn",     malayalam: "ml",
-  gujarati: "gu",      punjabi: "pa",     urdu: "ur",        nepali: "ne",
-};
+const ISO_CODE = WHISPER_ISO_CODE;
 
 interface GroqOptions {
   filePath: string;
@@ -178,12 +167,19 @@ async function parseGroqResponse(
     for (const seg of data.segments) {
       const tokens = (seg.text ?? "").trim().split(/\s+/).filter(Boolean);
       if (!tokens.length) continue;
-      const span = (seg.end - seg.start) / tokens.length;
+      // Guard against a malformed segment missing start/end — the
+      // interface declares them required, but that's a type-only
+      // guarantee against the actual API/proxy response. Without this,
+      // a missing value makes `span` NaN and every synthesised word in
+      // the segment gets NaN timestamps silently.
+      const segStart = typeof seg.start === "number" ? seg.start : 0;
+      const segEnd = typeof seg.end === "number" && seg.end > segStart ? seg.end : segStart;
+      const span = (segEnd - segStart) / tokens.length;
       tokens.forEach((tok, i) => {
         words.push({
           word: tok,
-          start: seg.start + i * span,
-          end: seg.start + (i + 1) * span,
+          start: segStart + i * span,
+          end: segStart + (i + 1) * span,
         });
       });
     }

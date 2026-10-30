@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import OpenAI from "openai";
+import { createClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
 
@@ -9,9 +10,21 @@ export const runtime = "nodejs";
  * upload getting reset by a middlebox) or a general OpenAI connectivity issue.
  *
  * GET /api/openai-ping → { ok: true, modelCount: N } | { ok: false, error }
+ *
+ * Relies on the middleware's isApiPath 401 gate for auth today, but that
+ * makes this route's protection a property of PUBLIC_PATHS staying
+ * exactly as it is — an explicit check here means a future edit to that
+ * list can't accidentally expose the connectivity-error detail below
+ * (raw OpenAI SDK error message + code) to an unauthenticated caller.
  */
 export async function GET() {
   try {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      return NextResponse.json({ ok: false, error: "Not signed in" }, { status: 401 });
+    }
+
     if (!process.env.OPENAI_API_KEY) {
       return NextResponse.json({ ok: false, error: "OPENAI_API_KEY missing" }, { status: 500 });
     }

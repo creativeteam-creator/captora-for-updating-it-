@@ -191,6 +191,49 @@ export function getSanscriptScheme(code: string): SanscriptScheme | null {
   return BY_CODE[code]?.sanscriptScheme ?? null;
 }
 
+/**
+ * ISO 639-1 (or Whisper-compatible) language codes for every catalogue
+ * entry, used as the language hint sent to Whisper-family STT providers
+ * (Groq, faster-whisper) and ElevenLabs.
+ *
+ * Single source of truth — groq.ts, elevenlabs.ts, and faster-whisper.ts
+ * each used to keep their own ~40-language subset of this table. Any
+ * language missing from a provider's local copy got silently skipped
+ * (`if (iso) form.append(...)`), so selecting e.g. Sanskrit, Sindhi, or
+ * Pashto sent no language hint at all and Whisper fell back to
+ * auto-detect with no warning surfaced anywhere.
+ */
+export const WHISPER_ISO_CODE: Record<string, string> = {
+  "hi-roman": "hi",
+  english: "en",       hindi: "hi",        marathi: "mr",      nepali: "ne",
+  sanskrit: "sa",       bengali: "bn",      assamese: "as",     punjabi: "pa",
+  gujarati: "gu",       tamil: "ta",        telugu: "te",       kannada: "kn",
+  malayalam: "ml",      sinhala: "si",      urdu: "ur",         sindhi: "sd",
+  pashto: "ps",
+  chinese: "zh",        cantonese: "yue",   japanese: "ja",     korean: "ko",
+  vietnamese: "vi",     thai: "th",         khmer: "km",        lao: "lo",
+  burmese: "my",        indonesian: "id",   malay: "ms",        tagalog: "tl",
+  javanese: "jw",       sundanese: "su",    tibetan: "bo",      mongolian: "mn",
+  arabic: "ar",         hebrew: "he",       persian: "fa",      turkish: "tr",
+  amharic: "am",        swahili: "sw",      yoruba: "yo",       hausa: "ha",
+  shona: "sn",          somali: "so",       lingala: "ln",      malagasy: "mg",
+  spanish: "es",        french: "fr",       german: "de",       italian: "it",
+  portuguese: "pt",     dutch: "nl",        swedish: "sv",      danish: "da",
+  norwegian: "no",      nynorsk: "nn",      finnish: "fi",      icelandic: "is",
+  faroese: "fo",        luxembourgish: "lb",catalan: "ca",      galician: "gl",
+  basque: "eu",         occitan: "oc",      breton: "br",       welsh: "cy",
+  maltese: "mt",        latin: "la",
+  russian: "ru",        ukrainian: "uk",    belarusian: "be",   polish: "pl",
+  czech: "cs",          slovak: "sk",       slovenian: "sl",    croatian: "hr",
+  bosnian: "bs",        serbian: "sr",      macedonian: "mk",   bulgarian: "bg",
+  romanian: "ro",       albanian: "sq",     greek: "el",        hungarian: "hu",
+  estonian: "et",       latvian: "lv",      lithuanian: "lt",   armenian: "hy",
+  georgian: "ka",       azerbaijani: "az",  kazakh: "kk",       uzbek: "uz",
+  turkmen: "tk",        tajik: "tg",        tatar: "tt",        bashkir: "ba",
+  yiddish: "yi",
+  afrikaans: "af",      "haitian creole": "ht", hawaiian: "haw", maori: "mi",
+};
+
 export const WRITING_SCRIPTS: Record<WritingScript, { label: string; hint: string }> = {
   native: {
     label: "Native script",

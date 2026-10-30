@@ -6,7 +6,8 @@ import { TopBar } from "@/components/TopBar";
 import { UploadHero } from "@/components/UploadHero";
 import { RecentVideos } from "@/components/RecentVideos";
 import { PrepareMediaModal, type PrepareMediaSettings } from "@/components/PrepareMediaModal";
-import { EditorView } from "@/components/EditorView";
+import { EditorView, type RetranscribeOverrides } from "@/components/EditorView";
+import { getSpokenLanguage, WRITING_SCRIPTS } from "@/lib/languages";
 import { SettingsModal } from "@/components/SettingsModal";
 import {
   deleteProject,
@@ -24,7 +25,7 @@ import {
   type CaptionStyleId,
   type CaptionStyleOverrides,
 } from "@/lib/styles";
-import { applyCaptionTrim } from "@/lib/captions";
+import { applyCaptionTrim, lookupNearLineKey } from "@/lib/captions";
 import { useUser, userInitials } from "@/lib/useUser";
 import type { WhisperWord } from "@/lib/whisper";
 import { listUserFonts, fontFaceCss, type UserFont } from "@/lib/userFonts";
@@ -94,6 +95,22 @@ export default function Home() {
    * mutate this array; debounced saves push back to Supabase.
    */
   const [editedWords, setEditedWords] = useState<WhisperWord[] | null>(null);
+  /** Optimistic-concurrency token for the currently-open project — see
+   *  updateProject() in lib/projects.ts. Seeded whenever a project is
+   *  (re)loaded, advanced after every successful autosave. Guards
+   *  against the same project being open in two tabs/devices, where a
+   *  stale full-snapshot save from one could otherwise silently
+   *  overwrite what the other just saved. */
+  const projectVersionRef = useRef<number | null>(null);
+  /** Avoids spamming the user with one alert per conflicted debounced
+   *  save when several fire around the same time. */
+  const conflictWarnedRef = useRef(false);
+  /** Serializes every write through saveProjectPatch so this tab's own
+   *  four independent debounced autosave effects never race each
+   *  other for the version token — without this, two saves from the
+   *  SAME tab firing close together would make the second spuriously
+   *  "conflict" against the first's own successful write. */
+  const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
   /** User-uploaded fonts, fetched once per session. The TextPanel calls
    *  `refreshUserFonts` after each successful upload. */
   const [userFonts, setUserFonts] = useState<UserFont[]>([]);
@@ -465,6 +482,8 @@ export default function Home() {
       setLineOverrides({});
       clearEditorHistory();
       void refreshProjects();
+      projectVersionRef.current = saved.version;
+      conflictWarnedRef.current = false;
       setStatus({ kind: "transcribed", project: saved, file });
     } catch (err) {
       setStatus({
@@ -472,6 +491,40 @@ export default function Home() {
         message: err instanceof Error ? err.message : String(err),
       });
     }
+  };
+
+  // Wrapper around updateProject() that threads the optimistic-concurrency
+  // token through: advances projectVersionRef on success, and — on a
+  // conflict (another tab/device saved first) — skips applying this
+  // stale patch and warns once instead of silently overwriting whatever
+  // the other session just saved.
+  const saveProjectPatch = (
+    projectId: string,
+    patch: Parameters<typeof updateProject>[1]
+  ): Promise<void> => {
+    const run = async () => {
+      try {
+        const result = await updateProject(projectId, patch, projectVersionRef.current ?? undefined);
+        if (result.conflict) {
+          if (!conflictWarnedRef.current) {
+            conflictWarnedRef.current = true;
+            window.alert(
+              "⚠ Yeh project kisi aur tab ya device mein bhi khula hai aur wahan se abhi save hua hai — aapka yeh change save nahi ho paya. Page refresh karke dubara try karo."
+            );
+          }
+          return;
+        }
+        if (result.version !== null) projectVersionRef.current = result.version;
+        conflictWarnedRef.current = false;
+      } catch (err) {
+        console.error("[page] save failed:", err);
+      }
+    };
+    // `run` catches its own errors internally, so it never rejects and
+    // the queue can never get stuck jammed behind a failed save.
+    const next = saveQueueRef.current.then(run);
+    saveQueueRef.current = next;
+    return next;
   };
 
   // Persist per-line animation overrides to Supabase. Debounced 400ms
@@ -483,7 +536,7 @@ export default function Home() {
     }
     const projectId = status.project.id;
     const t = setTimeout(() => {
-      void updateProject(projectId, { lineAnimations });
+      void saveProjectPatch(projectId, { lineAnimations });
     }, 400);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -509,7 +562,7 @@ export default function Home() {
     }
     const projectId = status.project.id;
     const t = setTimeout(() => {
-      void updateProject(projectId, {
+      void saveProjectPatch(projectId, {
         lineStyles,
         wordSizes,
         userBreaks: Array.from(userBreaks).sort((a, b) => a - b),
@@ -527,7 +580,7 @@ export default function Home() {
     }
     const projectId = status.project.id;
     const t = setTimeout(() => {
-      void updateProject(projectId, { styleId, styleOverrides: overrides });
+      void saveProjectPatch(projectId, { styleId, styleOverrides: overrides });
     }, 400);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -544,7 +597,7 @@ export default function Home() {
     const projectId = status.project.id;
     const t = setTimeout(() => {
       const transcriptText = editedWords.map((w) => w.word).join(" ");
-      void updateProject(projectId, {
+      void saveProjectPatch(projectId, {
         whisperWords: editedWords,
         transcriptText,
       });
@@ -553,7 +606,45 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editedWords, status.kind]);
 
-  const onRetranscribe = async () => {
+  // Immediately push every pending debounced edit to Supabase, bypassing
+  // the 400/700ms timers above. Wired to Sidebar's sign-out form (via
+  // onBeforeSignOut) — a user who edits and signs out inside that
+  // window previously raced the full-page navigation against the
+  // timer, and the navigation could win, silently dropping the last
+  // edit with no error and no record it never saved.
+  const flushPendingSaves = async () => {
+    if (
+      status.kind !== "transcribed" &&
+      status.kind !== "rendering" &&
+      status.kind !== "rendered"
+    ) {
+      return;
+    }
+    const projectId = status.project.id;
+    // Routed through saveProjectPatch (same version-tracking queue as the
+    // debounced effects above) rather than calling updateProject()
+    // directly, so a flush racing an in-flight debounced save can't
+    // desync projectVersionRef from what actually landed in the DB.
+    const writes: Promise<unknown>[] = [
+      saveProjectPatch(projectId, { lineAnimations }),
+      saveProjectPatch(projectId, {
+        lineStyles,
+        wordSizes,
+        userBreaks: Array.from(userBreaks).sort((a, b) => a - b),
+      }),
+      saveProjectPatch(projectId, { styleId, styleOverrides: overrides }),
+    ];
+    if (editedWords) {
+      const transcriptText = editedWords.map((w) => w.word).join(" ");
+      writes.push(saveProjectPatch(projectId, { whisperWords: editedWords, transcriptText }));
+    }
+    // allSettled, not all — a sign-out that's already in flight
+    // shouldn't get stuck because ONE of four saves failed; best-effort
+    // is strictly better than what existed before (nothing at all).
+    await Promise.allSettled(writes);
+  };
+
+  const onRetranscribe = async (overrides?: RetranscribeOverrides) => {
     if (status.kind !== "transcribed" && status.kind !== "rendered") return;
     const { project, file } = status;
     setRenderError(null);
@@ -573,10 +664,15 @@ export default function Home() {
         body: JSON.stringify({
           projectId: project.id,
           localFilePath: localFilePath || undefined,
-          // Keep the same language/script/accuracy the project was
-          // originally transcribed with. If the user wants to change,
-          // they can re-drop the file from Home to go through the
-          // Prepare Media modal again.
+          // Omitted fields fall back to the project's original settings
+          // server-side (see /api/retranscribe). EditorView's Re-
+          // transcribe panel passes these when the user wants to fix a
+          // wrong language/script/accuracy pick instead of blindly
+          // re-running the exact same settings that produced the
+          // transcript they're trying to fix.
+          accuracy: overrides?.accuracy,
+          spokenLanguage: overrides?.spokenLanguage,
+          writingScript: overrides?.writingScript,
         }),
       });
       const json = await res.json();
@@ -584,9 +680,25 @@ export default function Home() {
       // Replace project state with the fresh transcript. Keep all
       // other project fields (title, styleId, overrides, renderUrl…)
       // untouched — only the transcription-derived fields change.
+      //
+      // When the user changed language/script via the Re-transcribe
+      // panel, the header's language/script labels need updating too —
+      // otherwise a project actually re-transcribed in Hindi would keep
+      // showing its old "English" label until the next full reload.
+      const langOverride = overrides?.spokenLanguage
+        ? getSpokenLanguage(overrides.spokenLanguage)
+        : undefined;
       const updatedProject: ProjectRecord = {
         ...project,
         provider: json.provider ?? project.provider,
+        ...(overrides?.spokenLanguage && {
+          spokenLanguage: overrides.spokenLanguage,
+          spokenLanguageLabel: langOverride?.label ?? overrides.spokenLanguage,
+        }),
+        ...(overrides?.writingScript && {
+          writingScript: overrides.writingScript,
+          writingScriptLabel: WRITING_SCRIPTS[overrides.writingScript].label,
+        }),
         whisper: {
           task: "transcribe",
           language: json.result?.language ?? project.whisper.language,
@@ -658,10 +770,21 @@ export default function Home() {
           captionInSec,
           captionOutSec
         );
+      // Re-fetch fonts right before building the render payload rather
+      // than trusting whatever `userFonts` state already holds. Signed
+      // URLs expire after 24h (lib/userFonts.ts), and `userFonts` was
+      // only ever refreshed on sign-in or font add/delete — an editing
+      // session left open longer than that would silently send an
+      // expired URL, Chromium's @font-face fetch would fail, and
+      // FontLoader swallows that failure so the export just quietly
+      // renders in a fallback font instead of the one the user picked,
+      // with nothing telling them why it doesn't match the preview.
+      const freshUserFonts = await listUserFonts();
+      setUserFonts(freshUserFonts);
       // Send only the fonts whose URLs resolved — render Chromium needs
       // a downloadable URL to inject @font-face. Fonts without URLs are
       // recently-uploaded ones whose signed URL hasn't loaded yet.
-      const customFonts = userFonts
+      const customFonts = freshUserFonts
         .filter((f) => !!f.url)
         .map((f) => ({ family: f.family, url: f.url!, format: f.format }));
       const res = await fetch("/api/render", {
@@ -791,6 +914,8 @@ export default function Home() {
       setUserBreaks(new Set(project.userBreaks));
       setLineOverrides({});
       clearEditorHistory();
+      projectVersionRef.current = project.version;
+      conflictWarnedRef.current = false;
       setStatus({ kind: "transcribed", project, file });
     } catch (err) {
       setStatus({
@@ -798,6 +923,30 @@ export default function Home() {
         message: err instanceof Error ? err.message : String(err),
       });
     }
+  };
+
+  // Resolve `selectedLineKey` to whichever EXISTING key in `table` it
+  // actually corresponds to (±500ms — see lib/captions.ts's
+  // lineKeysAreClose), falling back to `selectedLineKey` itself when
+  // nothing is close (i.e. the line has no entry yet, so any key is as
+  // good as any other for a fresh write). Deleting a selected line's
+  // first word shifts that line's own key without moving
+  // `selectedLineKey` to match; writing/deleting under the stale key
+  // directly either orphans a new entry next to the real one, or
+  // no-ops a delete that looked like it should have worked.
+  const resolveSelectedLineKey = (
+    table: Record<string, unknown> | undefined
+  ): string | null => {
+    if (!selectedLineKey) return null;
+    if (!table || selectedLineKey in table) return selectedLineKey;
+    const target = Number(selectedLineKey);
+    let best: { delta: number; key: string } | null = null;
+    for (const k of Object.keys(table)) {
+      const delta = Math.abs(Number(k) - target);
+      if (delta > 50) continue;
+      if (!best || delta < best.delta) best = { delta, key: k };
+    }
+    return best?.key ?? selectedLineKey;
   };
 
   // Selection-aware template picker. When a line is selected (via
@@ -809,7 +958,8 @@ export default function Home() {
   const onPickTemplate = (id: CaptionStyleId) => {
     recordEditorChange();
     if (selectedLineKey) {
-      setLineStyles((prev) => ({ ...prev, [selectedLineKey]: id }));
+      const key = resolveSelectedLineKey(lineStyles);
+      setLineStyles((prev) => ({ ...prev, [key as string]: id }));
     } else {
       setStyleId(id);
       // Switching the global template wipes overrides — they were
@@ -825,14 +975,16 @@ export default function Home() {
   const onClearLineStyle = () => {
     if (!selectedLineKey) return;
     recordEditorChange();
+    const styleKey = resolveSelectedLineKey(lineStyles);
+    const overrideKey = resolveSelectedLineKey(lineOverrides);
     setLineStyles((prev) => {
       const next = { ...prev };
-      delete next[selectedLineKey];
+      delete next[styleKey as string];
       return next;
     });
     setLineOverrides((prev) => {
       const next = { ...prev };
-      delete next[selectedLineKey];
+      delete next[overrideKey as string];
       return next;
     });
   };
@@ -905,9 +1057,9 @@ export default function Home() {
           // to template selection only (Templates panel + selectedLineKey).
           overrides={overrides}
           editingStyleId={
-            (selectedLineKey
-              ? lineStyles[selectedLineKey]
-              : undefined) ?? styleId
+            // Fuzzy-matched (±500ms) for the same reason as the
+            // TemplatesPanel banner — see lookupNearLineKey.
+            lookupNearLineKey(lineStyles, selectedLineKey) ?? styleId
           }
           onOverridesChange={onOverridesChange}
           words={editedWords ?? status.project.whisper.words}
@@ -978,7 +1130,7 @@ export default function Home() {
   // Home mode — sidebar + topbar + upload + recent.
   return (
     <div className="flex min-h-screen">
-      <Sidebar />
+      <Sidebar onBeforeSignOut={flushPendingSaves} />
       <div className="flex min-h-screen flex-1 flex-col">
         <TopBar onSearch={setSearchQuery} onOpenSettings={() => setSettingsOpen(true)} />
 

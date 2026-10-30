@@ -42,19 +42,34 @@ const VALID_VARIANTS = new Set<string>(ENTRANCE_VARIANT_CYCLE);
 
 /**
  * Look up an override for a line by its first-word start time. Tries an
- * exact key first; falls back to the nearest key within ±50 centiseconds
- * (±500ms). The fuzzy fallback survives small timestamp shifts caused by:
+ * exact key first; falls back to the nearest key within
+ * `maxDeltaCentisec` (capped at ±50 centiseconds / ±500ms by every
+ * caller — see that computation below). The fuzzy fallback survives
+ * small timestamp shifts caused by:
  *   - Whisper re-running (timestamps drift a few centiseconds)
  *   - Multi-word splits where the FIRST token retains the line's start
  *     but cumulative rounding drifts the second/third token
  *   - Word edits that don't touch the line's first word
+ *
+ * `maxDeltaCentisec` is NOT a fixed constant — the caller shrinks it to
+ * the midpoint distance to this line's nearest neighbour. Two lines
+ * only ~300ms apart (ordinary speech cadence) both fall inside a fixed
+ * ±500ms window of each other, so a plain "nearest key within 500ms"
+ * search could return line A's override while resolving for line B, if
+ * B has none of its own and A's key happens to be the closest thing in
+ * the whole table. That's not a timestamp-drift case — it's a
+ * genuinely different line's data leaking onto this one. Capping the
+ * search to the midpoint with each neighbour guarantees a match can
+ * only ever belong to the line it's closest to among ALL lines, not
+ * just close to this one's raw timestamp.
  *
  * Drops overrides whose stored variant isn't in the current variant
  * catalogue (e.g. an old project saved a since-removed name).
  */
 function resolveLineOverride(
   startSec: number,
-  table: Record<string, string>
+  table: Record<string, string>,
+  maxDeltaCentisec: number
 ): string | null {
   const exact = table[lineKey(startSec)];
   if (exact && VALID_VARIANTS.has(exact)) return exact;
@@ -64,7 +79,7 @@ function resolveLineOverride(
   for (const [k, v] of Object.entries(table)) {
     if (!VALID_VARIANTS.has(v)) continue;
     const delta = Math.abs(Number(k) - target);
-    if (delta > 50) continue;
+    if (delta > maxDeltaCentisec) continue;
     if (!best || delta < best.delta) best = { delta, variant: v };
   }
   return best?.variant ?? null;
@@ -73,13 +88,14 @@ function resolveLineOverride(
 /**
  * Same fuzzy lookup pattern but for per-line full-style overrides.
  * Returns the resolved CaptionStyle or null when this line has no
- * entry. Tolerance kept identical to the variant resolver so a line's
- * style + animation overrides survive the same kinds of timestamp
- * drifts.
+ * entry. Tolerance is the same neighbour-midpoint-capped value the
+ * caller computes for `resolveLineOverride` — see that doc comment for
+ * why a fixed ±500ms window isn't safe on its own.
  */
 function resolveLineStyle(
   startSec: number,
-  table: Record<string, CaptionStyle>
+  table: Record<string, CaptionStyle>,
+  maxDeltaCentisec: number
 ): CaptionStyle | null {
   const exact = table[lineKey(startSec)];
   if (exact) return exact;
@@ -88,7 +104,7 @@ function resolveLineStyle(
   let best: { delta: number; style: CaptionStyle } | null = null;
   for (const [k, v] of Object.entries(table)) {
     const delta = Math.abs(Number(k) - target);
-    if (delta > 50) continue;
+    if (delta > maxDeltaCentisec) continue;
     if (!best || delta < best.delta) best = { delta, style: v };
   }
   return best?.style ?? null;
@@ -119,9 +135,24 @@ export function CaptionsTimeline({ words, style, lineAnimations, lineStyles, wor
   return (
     <AbsoluteFill style={{ backgroundColor: "transparent" }}>
       {lines.map((line, i) => {
+        const prev = lines[i - 1];
         const next = lines[i + 1];
         const phraseStartSec = line.words[0].start;
         const phraseEndSec = line.words[line.words.length - 1].end;
+        // Shrink the fuzzy-override search radius to the midpoint with
+        // each neighbouring line, capped at the usual ±500ms drift
+        // tolerance. Guarantees resolveLineOverride/resolveLineStyle
+        // can only ever match an entry that's genuinely closer to THIS
+        // line than to any other — see resolveLineOverride's doc
+        // comment for the two-lines-300ms-apart bleed this prevents.
+        const maxOverrideDeltaCentisec = Math.max(
+          0,
+          Math.min(
+            50,
+            prev ? Math.round(((phraseStartSec - prev.words[0].start) / 2) * 100) : Infinity,
+            next ? Math.round(((next.words[0].start - phraseStartSec) / 2) * 100) : Infinity
+          )
+        );
         // Cap how long a phrase is held on screen after its own words
         // finish. Without this cap, a phrase whose `next` neighbour is
         // 30 seconds away (music / silence break in the audio) stays
@@ -143,7 +174,7 @@ export function CaptionsTimeline({ words, style, lineAnimations, lineStyles, wor
         // Whisper, multi-word splits) don't drop a previously-set
         // animation.
         const override = lineAnimations
-          ? resolveLineOverride(phraseStartSec, lineAnimations)
+          ? resolveLineOverride(phraseStartSec, lineAnimations, maxOverrideDeltaCentisec)
           : null;
         const variant: EntranceVariant = override
           ? (override as EntranceVariant)
@@ -154,7 +185,7 @@ export function CaptionsTimeline({ words, style, lineAnimations, lineStyles, wor
         // the composition-level `style` prop (the project's default
         // template) when no entry matches.
         const lineStyle: CaptionStyle =
-          (lineStyles ? resolveLineStyle(phraseStartSec, lineStyles) : null) ?? style;
+          (lineStyles ? resolveLineStyle(phraseStartSec, lineStyles, maxOverrideDeltaCentisec) : null) ?? style;
 
         return (
           <Sequence

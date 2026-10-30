@@ -60,9 +60,19 @@ export function PhraseCaption({ words, phraseStartSec, style, variant = "pop", p
   // Shift time FORWARD by anticipation so the comparison fires earlier.
   const tForLookup = tAbsoluteSec + WORD_ANTICIPATION_SEC;
 
+  // A zero-duration word (STT hallucination, or a freshly inserted word
+  // not yet retimed) has `end === start`, so `tForLookup < words[i].end`
+  // can never be true for it — the primary scan below would always skip
+  // straight past it to whichever later word's own window happens to
+  // contain the same instant, and that word never gets its highlight.
+  // Floor its effective window to a short, real duration, capped by the
+  // next word's start so it never eats into the next word's own time.
+  const MIN_HIGHLIGHT_SEC = 0.05;
   let activeIdx = -1;
   for (let i = 0; i < words.length; i++) {
-    if (tForLookup >= words[i].start && tForLookup < words[i].end) {
+    const nextStart = i + 1 < words.length ? words[i + 1].start : Infinity;
+    const effectiveEnd = Math.min(Math.max(words[i].end, words[i].start + MIN_HIGHLIGHT_SEC), nextStart);
+    if (tForLookup >= words[i].start && tForLookup < effectiveEnd) {
       activeIdx = i;
       break;
     }

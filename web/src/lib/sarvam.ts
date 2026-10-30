@@ -128,6 +128,12 @@ export async function transcribeWithSarvam(opts: SarvamOptions): Promise<Whisper
     const ts = data.timestamps;
     const starts = ts.start_time_seconds ?? [];
     const ends = ts.end_time_seconds ?? [];
+    if (starts.length !== ts.words!.length || ends.length !== ts.words!.length) {
+      console.warn(
+        `[sarvam] timestamp array length mismatch: words=${ts.words!.length} ` +
+        `starts=${starts.length} ends=${ends.length} — trailing words will get 0-duration fallback timestamps`
+      );
+    }
     ts.words!.forEach((w, i) => {
       const text = (w ?? "").trim();
       if (!text) return;

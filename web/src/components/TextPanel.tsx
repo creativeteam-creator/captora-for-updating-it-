@@ -50,17 +50,6 @@ const FONT_GROUPS: { category: FontCategory; fonts: typeof FONTS }[] = (() => {
     .map((c) => ({ category: c, fonts: map.get(c)! }));
 })();
 
-/**
- * Pick the closest catalogue font for an arbitrary `font-family` string —
- * used to resolve the saved style override (which may be a stack like
- * `"Anton, Montserrat, Inter, sans-serif"`) back to one of our options.
- */
-function matchFontStack(value: string): string {
-  const lower = value.toLowerCase();
-  const hit = FONTS.find((f) => lower.includes(f.family.toLowerCase()));
-  return hit ? fontStack(hit.family) : value;
-}
-
 interface Props {
   base: CaptionStyle;
   overrides: CaptionStyleOverrides;
@@ -72,9 +61,52 @@ interface Props {
 
 export function TextPanel({ base, overrides, onChange, onReset, userFonts, onUserFontsChanged }: Props) {
   const merged = applyStyleOverrides(base, overrides);
+  // These four layout modes swap PhraseCaption out for a dedicated
+  // component (ClusterCaption / StackCaption / StickerStackCaption /
+  // NeonPillCaption — see remotion/src/components/CaptionsTimeline.tsx's
+  // dispatch) that positions/styles words on its own terms and never
+  // reads verticalPosition, italic/underline/textAlign, glow, drop
+  // shadow, emphasis mode, or the active-word size multiplier. Only the
+  // preset defines these fields (no Text-panel control sets them), so
+  // reading them off `base` is equivalent to `merged` here.
+  const isSpecialLayout = !!(base.cluster || base.stack || base.stickerStack || base.neonPill);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
+
+  /**
+   * Resolve an arbitrary `font-family` CSS value (which may be a fallback
+   * stack like `"'Acme Display', Anton, Montserrat, sans-serif"`) back to
+   * one of the dropdown's own option values, so the select shows the
+   * right thing selected.
+   *
+   * Matches on the STACK'S FIRST entry only, exactly — not by searching
+   * for any catalogue name anywhere in the string. The previous version
+   * used `stack.includes(catalogueName)`, which found "Anton" sitting in
+   * the FALLBACK portion of a stack that actually started with a custom
+   * uploaded font, and matched that instead. Right after uploading and
+   * applying a custom font on any of the ~30 templates whose base stack
+   * happens to include "Anton" as a fallback, the dropdown would show
+   * "Anton" selected even though the rendered text was correctly using
+   * the custom font — a UI lie the CSS itself never had.
+   */
+  const matchFontStack = (value: string): string => {
+    const primary = value.split(",")[0]?.trim().replace(/^['"]|['"]$/g, "") ?? value;
+    const userHit = userFonts.find(
+      (f) => f.family.toLowerCase() === primary.toLowerCase()
+    );
+    if (userHit) return userFontValue(userHit);
+    const hit = FONTS.find((f) => f.family.toLowerCase() === primary.toLowerCase());
+    return hit ? fontStack(hit.family) : value;
+  };
   const [uploadStatus, setUploadStatus] = useState<{ kind: "idle" | "uploading" | "error"; message?: string }>({ kind: "idle" });
+  // Files picked but not yet uploaded — waiting on the user to confirm a
+  // family name via the inline input below (see `savingPreset` above for
+  // why this isn't `window.prompt()`: Electron's BrowserWindow doesn't
+  // implement it, so every font-file pick used to silently no-op in the
+  // packaged desktop app — the exact dead-end this component's preset
+  // flow was already rewritten to avoid, just not here yet).
+  const [namingFontFiles, setNamingFontFiles] = useState<File[] | null>(null);
+  const [fontFamilyDraft, setFontFamilyDraft] = useState("");
 
   // ── My Presets — locally-saved snapshots of CaptionStyleOverrides ───────
   const [presets, setPresets] = useState<TextPreset[]>([]);
@@ -191,47 +223,24 @@ export function TextPanel({ base, overrides, onChange, onReset, userFonts, onUse
     return result.trim() || stem;
   };
 
-  const handleFilePicked = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files ?? []);
+  /**
+   * File pick only stages the files and shows the inline family-name
+   * input below the upload buttons — see the `namingFontFiles` state
+   * comment for why this no longer calls `window.prompt()` directly.
+   * The folder picker is pre-filtered to font files here so the staged
+   * count the user sees (and the default name derived from it) is
+   * already accurate before they type anything.
+   */
+  const handleFilePicked = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const picked = Array.from(e.target.files ?? []);
     e.target.value = ""; // allow re-picking the same file/folder later
-    if (files.length === 0) return;
+    if (picked.length === 0) return;
 
-    // Single-file picker: prompt the user for a friendly family name (legacy flow).
-    if (files.length === 1) {
-      const file = files[0];
-      const defaultName = familyFromFilename(file.name);
-      const family = window.prompt(
-        "Font family name (this is what captions reference):",
-        defaultName
-      );
-      if (!family || !family.trim()) return;
-
-      setUploadStatus({ kind: "uploading" });
-      try {
-        const uploaded = await uploadFont(file, family.trim());
-        await onUserFontsChanged();
-        setUploadStatus({ kind: "idle" });
-        set("fontFamily", `'${uploaded.family}', ${matchFontStack(merged.fontFamily)}`);
-      } catch (err) {
-        // Log the full error so users can copy it from DevTools when
-        // reporting "fonts don't import" — the visible UI message is
-        // often truncated. Likely culprits surface here: missing
-        // `user_fonts` table, RLS policy blocking insert, bucket
-        // not created, or auth session expired.
-        console.error("[TextPanel] font upload failed", err);
-        const message = err instanceof Error ? err.message : "Upload failed";
-        setUploadStatus({ kind: "error", message });
-      }
-      return;
-    }
-
-    // Folder / multi-file pick: derive the family from the first file's
-    // stem and upload every variant under the same family. The browser
-    // picks the right weight/style automatically via @font-face.
-    const fontFiles = files.filter((f) =>
-      /\.(ttf|otf|woff2?)$/i.test(f.name)
-    );
-    if (fontFiles.length === 0) {
+    const files =
+      picked.length === 1
+        ? picked
+        : picked.filter((f) => /\.(ttf|otf|woff2?)$/i.test(f.name));
+    if (files.length === 0) {
       setUploadStatus({
         kind: "error",
         message: "No .ttf / .otf / .woff files found in selection",
@@ -239,23 +248,45 @@ export function TextPanel({ base, overrides, onChange, onReset, userFonts, onUse
       return;
     }
 
-    const inferredFamily = familyFromFilename(fontFiles[0].name);
-    const family = window.prompt(
-      `Family name for ${fontFiles.length} font files:`,
-      inferredFamily
-    );
-    if (!family || !family.trim()) return;
+    setFontFamilyDraft(familyFromFilename(files[0].name));
+    setNamingFontFiles(files);
+  };
 
+  const cancelFontUpload = () => {
+    setNamingFontFiles(null);
+    setFontFamilyDraft("");
+  };
+
+  /**
+   * Runs once the user confirms a family name in the inline input.
+   * Handles both the single-file and the folder/multi-file cases —
+   * same upload logic the old window.prompt() flow had, just triggered
+   * from a button instead of a prompt callback.
+   */
+  const commitFontUpload = async () => {
+    const files = namingFontFiles;
+    const family = fontFamilyDraft.trim();
+    if (!files || !family) {
+      cancelFontUpload();
+      return;
+    }
+    setNamingFontFiles(null);
+    setFontFamilyDraft("");
     setUploadStatus({ kind: "uploading" });
     try {
       let firstUploaded: Awaited<ReturnType<typeof uploadFont>> | null = null;
       let errors = 0;
-      for (const file of fontFiles) {
+      for (const file of files) {
         try {
-          const u = await uploadFont(file, family.trim());
+          const u = await uploadFont(file, family);
           if (!firstUploaded) firstUploaded = u;
         } catch (err) {
           errors++;
+          // Log the full error so users can copy it from DevTools when
+          // reporting "fonts don't import" — the visible UI message is
+          // often truncated. Likely culprits surface here: missing
+          // `user_fonts` table, RLS policy blocking insert, bucket
+          // not created, or auth session expired.
           console.error(`[TextPanel] upload failed for ${file.name}:`, err);
         }
       }
@@ -264,7 +295,10 @@ export function TextPanel({ base, overrides, onChange, onReset, userFonts, onUse
         errors > 0
           ? {
               kind: "error",
-              message: `Uploaded ${fontFiles.length - errors}/${fontFiles.length} files (${errors} failed — check console)`,
+              message:
+                files.length > 1
+                  ? `Uploaded ${files.length - errors}/${files.length} files (${errors} failed — check console)`
+                  : "Upload failed",
             }
           : { kind: "idle" }
       );
@@ -524,6 +558,43 @@ export function TextPanel({ base, overrides, onChange, onReset, userFonts, onUse
               + Family Folder
             </button>
           </div>
+          {namingFontFiles && (
+            <div className="mt-1.5 flex items-center gap-1.5">
+              <input
+                type="text"
+                autoFocus
+                value={fontFamilyDraft}
+                onChange={(e) => setFontFamilyDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void commitFontUpload();
+                  else if (e.key === "Escape") cancelFontUpload();
+                }}
+                placeholder={
+                  namingFontFiles.length > 1
+                    ? `Family name for ${namingFontFiles.length} font files`
+                    : "Font family name (this is what captions reference)"
+                }
+                className="h-8 flex-1 rounded-md border border-[var(--border)] bg-[var(--bg-elevated)] px-2 text-xs text-[var(--text)] focus:border-[var(--accent)] focus:outline-none"
+              />
+              <button
+                type="button"
+                onClick={() => void commitFontUpload()}
+                disabled={!fontFamilyDraft.trim()}
+                className="rounded-md border border-[var(--accent)] bg-[var(--accent)] px-2.5 py-1 text-[11px] uppercase tracking-wide text-black hover:opacity-90 disabled:opacity-50"
+                title="Upload"
+              >
+                Upload
+              </button>
+              <button
+                type="button"
+                onClick={cancelFontUpload}
+                className="rounded-md border border-[var(--border)] bg-[var(--bg-elevated)] px-2.5 py-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)] hover:border-[var(--border)] hover:text-[var(--text)]"
+                title="Cancel"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
           {uploadStatus.kind === "error" && (
             <div className="mt-1 text-[11px] text-red-400">{uploadStatus.message}</div>
           )}
@@ -566,7 +637,15 @@ export function TextPanel({ base, overrides, onChange, onReset, userFonts, onUse
         </ControlRow>
         </Section>
 
-        <Section title="Position" defaultOpen>
+        <Section
+          title="Position"
+          defaultOpen
+          disabledNote={
+            isSpecialLayout
+              ? "This template positions words itself (scatter / stack / sticker-rail layout) — Position doesn't apply."
+              : undefined
+          }
+        >
         <ControlRow label="Position Y">
           <SliderWithNumber
             value={Math.round(merged.verticalPosition * 100)}
@@ -574,8 +653,27 @@ export function TextPanel({ base, overrides, onChange, onReset, userFonts, onUse
             max={95}
             step={1}
             unit="%"
-            onChange={(v) => set("verticalPosition", v / 100)}
+            onChange={(v) => {
+              // Presets like "Bouncy Mix" ship a `verticalPositionCycle`
+              // (one Y per phrase index) that PhraseCaption checks BEFORE
+              // `verticalPosition` — it wins unconditionally whenever
+              // present (remotion/src/components/PhraseCaption.tsx).
+              // Without clearing it here, dragging this slider changed
+              // the override but every phrase kept cycling through the
+              // preset's fixed Y positions with no visible effect.
+              // Explicitly overriding the key to `undefined` is enough:
+              // `applyStyleOverrides` spreads overrides last, so
+              // `merged.verticalPositionCycle` becomes `undefined` and
+              // PhraseCaption's `cycle && cycle.length > 0` check falls
+              // through to plain `verticalPosition`.
+              onChange({ ...overrides, verticalPosition: v / 100, verticalPositionCycle: undefined });
+            }}
           />
+          {base.verticalPositionCycle && !("verticalPositionCycle" in overrides) && (
+            <div className="mt-1 text-[10px] text-[var(--text-muted)]">
+              This template normally moves each line to a different height. Dragging this slider pins every line to one position instead.
+            </div>
+          )}
         </ControlRow>
 
         <ControlRow label="Position X">
@@ -594,27 +692,37 @@ export function TextPanel({ base, overrides, onChange, onReset, userFonts, onUse
         {/* ── Text Style — bold / italic / underline / case ──────────── */}
         <ControlRow label="Style">
           <div className="flex items-center gap-1">
-            <StyleToggle
-              label="B"
-              title="Bold"
-              bold
-              active={merged.bold !== false}
-              onChange={(v) => set("bold", v)}
-            />
-            <StyleToggle
-              label="I"
-              title="Italic"
-              italic
-              active={!!merged.italic}
-              onChange={(v) => set("italic", v)}
-            />
-            <StyleToggle
-              label="U"
-              title="Underline"
-              underline
-              active={!!merged.underline}
-              onChange={(v) => set("underline", v)}
-            />
+            {/* Bold/Italic/Underline: unused by the cluster/stack/sticker/
+                neon-pill layout components (see `isSpecialLayout` above) —
+                dimmed rather than removed so the row doesn't jump when
+                switching templates, with the "Case" group right after it
+                staying interactive since all four DO read `textCase`. */}
+            <div
+              className={`flex items-center gap-1 ${isSpecialLayout ? "pointer-events-none opacity-40" : ""}`}
+              title={isSpecialLayout ? "Not used by this template's layout" : undefined}
+            >
+              <StyleToggle
+                label="B"
+                title="Bold"
+                bold
+                active={merged.bold !== false}
+                onChange={(v) => set("bold", v)}
+              />
+              <StyleToggle
+                label="I"
+                title="Italic"
+                italic
+                active={!!merged.italic}
+                onChange={(v) => set("italic", v)}
+              />
+              <StyleToggle
+                label="U"
+                title="Underline"
+                underline
+                active={!!merged.underline}
+                onChange={(v) => set("underline", v)}
+              />
+            </div>
             <div className="ml-1 inline-flex rounded-md border border-[var(--border-subtle)] overflow-hidden">
               {(["upper", "sentence", "lower"] as const).map((c) => (
                 <button
@@ -635,9 +743,13 @@ export function TextPanel({ base, overrides, onChange, onReset, userFonts, onUse
           </div>
         </ControlRow>
 
-        {/* ── Alignment (left/center/right) ──────────────────────────── */}
+        {/* ── Alignment (left/center/right) — also unused by the four
+            special-layout templates; see `isSpecialLayout` above. ──── */}
         <ControlRow label="Align">
-          <div className="inline-flex rounded-md border border-[var(--border-subtle)] overflow-hidden">
+          <div
+            className={`inline-flex rounded-md border border-[var(--border-subtle)] overflow-hidden ${isSpecialLayout ? "pointer-events-none opacity-40" : ""}`}
+            title={isSpecialLayout ? "Not used by this template's layout" : undefined}
+          >
             {(["left", "center", "right"] as const).map((a) => (
               <button
                 key={a}
@@ -715,7 +827,15 @@ export function TextPanel({ base, overrides, onChange, onReset, userFonts, onUse
         </ControlRow>
         </Section>
 
-        <Section title="Emphasis" defaultOpen>
+        <Section
+          title="Emphasis"
+          defaultOpen
+          disabledNote={
+            isSpecialLayout
+              ? "This template has its own built-in emphasis (hero word / newest word / active pill) — these controls don't apply."
+              : undefined
+          }
+        >
         {/* Emphasize / Spotlight — matches Kalakar's EMPHASIS section
             toggle. "Emphasize" (default) makes the active word brighter
             and optionally bigger. "Spotlight" leaves the active word
@@ -776,7 +896,15 @@ export function TextPanel({ base, overrides, onChange, onReset, userFonts, onUse
         )}
         </Section>
 
-        <Section title="Effects" defaultOpen>
+        <Section
+          title="Effects"
+          defaultOpen
+          disabledNote={
+            isSpecialLayout
+              ? "Glow and Drop Shadow aren't used by this template's layout."
+              : undefined
+          }
+        >
         <div className="flex items-center justify-between rounded-md border border-[var(--border)] bg-[var(--bg-elevated)] px-3 py-2.5">
           <span className="text-xs text-[var(--text-muted)]">Drop Shadow</span>
           <ToggleSwitch
@@ -785,53 +913,62 @@ export function TextPanel({ base, overrides, onChange, onReset, userFonts, onUse
           />
         </div>
 
+        {/* ── Glow mode (none / active-only / all) ─────────────────────
+            Deliberately NOT gated behind the Drop Shadow toggle below —
+            glow is a separate textShadow/box-shadow layer applied by
+            PhraseCaption independently of shadowOpacity (see
+            remotion/src/components/PhraseCaption.tsx's glowMode
+            resolution). Several presets ship glow with shadowOpacity at
+            0 (Hormozi's lime glow, for one) — hiding this section
+            whenever the user turned Drop Shadow off meant the glow kept
+            rendering with no UI left to see or change it. */}
+        <ControlRow label="Glow">
+          <div className="inline-flex rounded-md border border-[var(--border-subtle)] overflow-hidden">
+            {(["none", "active", "all"] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                className={`px-2 py-1 text-[10px] uppercase tracking-wide ${
+                  (merged.glowMode ?? (merged.glowOnActive ? "active" : "none")) === m
+                    ? "bg-[var(--accent)] text-black"
+                    : "text-[var(--text-muted)] hover:text-[var(--text)]"
+                }`}
+                onClick={() => set("glowMode", m)}
+              >
+                {m}
+              </button>
+            ))}
+          </div>
+        </ControlRow>
+
+        {(merged.glowMode ?? (merged.glowOnActive ? "active" : "none")) !== "none" && (
+          <>
+            <ControlRow label="Glow Color">
+              <ColorInput
+                value={rgbToHex(merged.glowColor ?? merged.highlightColor)}
+                onChange={(hex) => {
+                  const rgb = hexToRgb(hex);
+                  if (rgb) set("glowColor", rgb);
+                }}
+              />
+            </ControlRow>
+            <ControlRow label="Glow Blur">
+              <SliderWithNumber
+                value={merged.glowBlur ?? 24}
+                min={4}
+                max={80}
+                step={1}
+                unit="px"
+                onChange={(v) => set("glowBlur", v)}
+              />
+            </ControlRow>
+          </>
+        )}
+
+        {/* ── Drop shadow tuning (offsets + blur + color) — these DO
+            only matter while Drop Shadow is on, so they stay gated. */}
         {merged.shadowOpacity > 0.05 && (
           <>
-          {/* ── Glow mode (none / active-only / all) ─────────────── */}
-          <ControlRow label="Glow">
-            <div className="inline-flex rounded-md border border-[var(--border-subtle)] overflow-hidden">
-              {(["none", "active", "all"] as const).map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  className={`px-2 py-1 text-[10px] uppercase tracking-wide ${
-                    (merged.glowMode ?? (merged.glowOnActive ? "active" : "none")) === m
-                      ? "bg-[var(--accent)] text-black"
-                      : "text-[var(--text-muted)] hover:text-[var(--text)]"
-                  }`}
-                  onClick={() => set("glowMode", m)}
-                >
-                  {m}
-                </button>
-              ))}
-            </div>
-          </ControlRow>
-
-          {(merged.glowMode ?? (merged.glowOnActive ? "active" : "none")) !== "none" && (
-            <>
-              <ControlRow label="Glow Color">
-                <ColorInput
-                  value={rgbToHex(merged.glowColor ?? merged.highlightColor)}
-                  onChange={(hex) => {
-                    const rgb = hexToRgb(hex);
-                    if (rgb) set("glowColor", rgb);
-                  }}
-                />
-              </ControlRow>
-              <ControlRow label="Glow Blur">
-                <SliderWithNumber
-                  value={merged.glowBlur ?? 24}
-                  min={4}
-                  max={80}
-                  step={1}
-                  unit="px"
-                  onChange={(v) => set("glowBlur", v)}
-                />
-              </ControlRow>
-            </>
-          )}
-
-          {/* ── Drop shadow tuning (offsets + blur + color) ─────── */}
           <ControlRow label="Shadow Offset X">
             <SliderWithNumber
               value={merged.dropShadowOffsetX ?? 0}
@@ -926,10 +1063,23 @@ function Section({
   title,
   defaultOpen = true,
   children,
+  disabledNote,
 }: {
   title: string;
   defaultOpen?: boolean;
   children: React.ReactNode;
+  /**
+   * When set, the section stays visible but every control inside is
+   * disabled (dimmed + non-interactive) and this note explains why.
+   * Used for property groups that some templates' renderer components
+   * (ClusterCaption, StackCaption, StickerStackCaption, NeonPillCaption
+   * — the four that swap in for PhraseCaption when `style.cluster` /
+   * `.stack` / `.stickerStack` / `.neonPill` is set) never read. Before
+   * this, dragging e.g. "Position Y" on the Cluster Kinetic template
+   * produced zero visible change with no indication why — the control
+   * looked live but the field it wrote had no reader.
+   */
+  disabledNote?: string;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
@@ -942,7 +1092,18 @@ function Section({
         <span>{title}</span>
         <span className="text-[8px]">{open ? "▼" : "▶"}</span>
       </button>
-      {open && <div className="mt-3 space-y-3">{children}</div>}
+      {open && (
+        <div className="mt-3 space-y-3">
+          {disabledNote && (
+            <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-2 py-1.5 text-[10px] text-[var(--text-muted)]">
+              {disabledNote}
+            </div>
+          )}
+          <div className={disabledNote ? "pointer-events-none space-y-3 opacity-40" : "space-y-3"}>
+            {children}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -47,8 +47,14 @@ export function NeonPillCaption({
   const revealed = words.filter((w) => w.start <= tSec);
   if (revealed.length === 0) return null;
 
+  // `?? DEFAULT_PALETTE` only catches null/undefined — an explicit empty
+  // override array (`neonPill: { palette: [] }`) would leave `% 0` as
+  // NaN and crash rgbToCss on the resulting `undefined` entry.
+  const customPalette = style.neonPill?.palette;
   const palette =
-    style.neonPill?.palette ?? (DEFAULT_PALETTE as [number, number, number][]);
+    customPalette && customPalette.length > 0
+      ? customPalette
+      : (DEFAULT_PALETTE as [number, number, number][]);
   const color = palette[phraseIndex % palette.length];
   const colorCss = rgbToCss(color);
 
@@ -66,7 +72,12 @@ export function NeonPillCaption({
   const phraseEndSec = words[words.length - 1].end;
   const phraseDurationSec = Math.max(0.1, phraseEndSec - phraseStartSec);
   const phraseDurationFrames = Math.max(1, Math.round(phraseDurationSec * fps));
-  const fadeStart = phraseDurationFrames - 6;
+  // Clamp the fade-out window to the phrase's own duration — the 0.1s
+  // duration floor above can leave phraseDurationFrames well under 6, and
+  // an un-clamped `phraseDurationFrames - 6` goes negative, making the
+  // exit-fade active from frame 0 and capping opacity around 0.5 instead
+  // of ever reaching 1 for a very short/zero-duration phrase.
+  const fadeStart = phraseDurationFrames - Math.min(6, phraseDurationFrames);
   const fade =
     frame > fadeStart
       ? interpolate(frame, [fadeStart, phraseDurationFrames], [1, 0], {

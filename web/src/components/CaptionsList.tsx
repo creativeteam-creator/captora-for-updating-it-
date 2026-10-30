@@ -16,7 +16,7 @@
 
 import { useMemo, useRef, useState, useEffect, useCallback } from "react";
 import type { PlayerRef } from "@remotion/player";
-import { groupWordsIntoLines, pickKeywordIndex } from "@/lib/captions";
+import { groupWordsIntoLines, pickKeywordIndex, remapUserBreaksAfterSplice } from "@/lib/captions";
 import type { WhisperWord } from "@/lib/whisper";
 import { ENTRANCE_VARIANT_CYCLE, type EntranceVariant } from "@captora/remotion";
 
@@ -156,11 +156,29 @@ export function CaptionsList({
         `You can undo this with Ctrl/Cmd + Z.`
     );
     if (!ok) return;
-    const cleaned = words.filter((w) => {
+    // Filtering (not a single splice) can drop words from anywhere in
+    // the array, so userBreaks needs an explicit old-index → new-index
+    // map rather than the splice-shaped remap the other edits use. A
+    // break survives if its anchor word survives, moved to that word's
+    // new position; a break whose anchor word was itself a filler word
+    // being removed is dropped along with it.
+    const oldToNew = new Map<number, number>();
+    const cleaned: WhisperWord[] = [];
+    words.forEach((w, i) => {
       const t = w.word.toLowerCase().replace(/[.,!?;:]/g, "").trim();
-      return !FILLER_WORDS.has(t);
+      if (FILLER_WORDS.has(t)) return;
+      oldToNew.set(i, cleaned.length);
+      cleaned.push(w);
     });
     onWordsChange(cleaned);
+    if (onUserBreaksChange && userBreaks && userBreaks.size > 0) {
+      const remapped = new Set<number>();
+      for (const idx of userBreaks) {
+        const mapped = oldToNew.get(idx);
+        if (mapped !== undefined) remapped.add(mapped);
+      }
+      onUserBreaksChange(remapped);
+    }
   };
   // Toggle a break AFTER word index `idx`. Click ⏎ between word N
   // and word N+1 — adds N to userBreaks (splits the line); click
@@ -260,10 +278,19 @@ export function CaptionsList({
     const trimmed = editingValue.trim();
     const original = words[editingIndex];
     const next = [...words];
+    // Tracks how many words replace the one at editingIndex, so we know
+    // whether userBreaks needs remapping below. A plain single-word text
+    // edit (1 in, 1 out) leaves every index unchanged — deliberately NOT
+    // run through remapUserBreaksAfterSplice in that case, since its
+    // "index inside the edited region is dropped" rule would otherwise
+    // delete a break that happened to sit on editingIndex even though
+    // nothing about the array's shape actually changed.
+    let insertCount = 1;
 
     if (trimmed.length === 0) {
       // Empty input → drop the word.
       next.splice(editingIndex, 1);
+      insertCount = 0;
     } else {
       // Split on whitespace — typing "naam tarun" replaces one word with two.
       const tokens = trimmed.split(/\s+/);
@@ -275,6 +302,7 @@ export function CaptionsList({
         end: original.start + (i + 1) * per,
       }));
       next.splice(editingIndex, 1, ...replacement);
+      insertCount = tokens.length;
 
       // ── Auto-save to backend glossary ─────────────────────────────────
       // If the user changed the word (not just whitespace-trimmed), save
@@ -294,6 +322,9 @@ export function CaptionsList({
     }
 
     onWordsChange(next);
+    if (onUserBreaksChange && userBreaks && insertCount !== 1) {
+      onUserBreaksChange(remapUserBreaksAfterSplice(userBreaks, editingIndex, 1, insertCount));
+    }
     cancelEdit();
   };
 
@@ -317,8 +348,11 @@ export function CaptionsList({
       const next = words.slice();
       next.splice(absoluteIdx, 1);
       onWordsChange(next);
+      if (onUserBreaksChange && userBreaks) {
+        onUserBreaksChange(remapUserBreaksAfterSplice(userBreaks, absoluteIdx, 1, 0));
+      }
     },
-    [words, onWordsChange]
+    [words, onWordsChange, userBreaks, onUserBreaksChange]
   );
 
   // Remove every word that belongs to a line — used by the per-line
@@ -347,11 +381,14 @@ export function CaptionsList({
       const updated = [...words];
       updated.splice(afterIdx + 1, 0, inserted);
       onWordsChange(updated);
+      if (onUserBreaksChange && userBreaks) {
+        onUserBreaksChange(remapUserBreaksAfterSplice(userBreaks, afterIdx + 1, 0, 1));
+      }
       // Drop straight into edit mode so the user just types the word.
       setEditingIndex(afterIdx + 1);
       setEditingValue("new");
     },
-    [words, onWordsChange]
+    [words, onWordsChange, userBreaks, onUserBreaksChange]
   );
 
   const deleteLine = useCallback(
@@ -360,8 +397,11 @@ export function CaptionsList({
       const next = words.slice();
       next.splice(startIndex, count);
       onWordsChange(next);
+      if (onUserBreaksChange && userBreaks) {
+        onUserBreaksChange(remapUserBreaksAfterSplice(userBreaks, startIndex, count, 0));
+      }
     },
-    [words, onWordsChange]
+    [words, onWordsChange, userBreaks, onUserBreaksChange]
   );
 
   // ── Find & Replace ────────────────────────────────────────────────────

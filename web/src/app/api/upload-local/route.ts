@@ -6,6 +6,7 @@ import { Readable } from "stream";
 import { join } from "path";
 import { tmpdir } from "os";
 import { createClient } from "@/lib/supabase/server";
+import { isValidProjectId, safeMediaExt } from "@/lib/pathSafety";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -59,6 +60,19 @@ export async function POST(req: NextRequest) {
       { status: 400 }
     );
   }
+  // Both values get concatenated straight into a filesystem path below
+  // (join() doesn't stop ".." from escaping SESSION_DIR) — same class of
+  // bug /api/render already closed via lib/pathSafety.ts. This route is
+  // dev-only and requires a signed-in session, but within a dev/staging
+  // box any authenticated user could otherwise write/overwrite files
+  // outside the intended tmp directory.
+  if (!isValidProjectId(projectId)) {
+    return NextResponse.json({ ok: false, error: "projectId must be a UUID" }, { status: 400 });
+  }
+  const safeExt = safeMediaExt(ext);
+  if (!safeExt) {
+    return NextResponse.json({ ok: false, error: `Unsupported extension: ${ext}` }, { status: 400 });
+  }
 
   await mkdir(SESSION_DIR, { recursive: true });
 
@@ -86,7 +100,7 @@ export async function POST(req: NextRequest) {
   }
 
   // ── Last chunk: assemble all chunks into the final file ──────────────
-  const finalPath = join(SESSION_DIR, `${projectId}${ext}`);
+  const finalPath = join(SESSION_DIR, `${projectId}${safeExt}`);
   try {
     const ws = createWriteStream(finalPath);
 
@@ -110,6 +124,6 @@ export async function POST(req: NextRequest) {
 
   // Return a fake storage path whose first segment is the userId so the
   // RLS ownership check in /api/transcribe still passes.
-  const fakePath = `${user.id}/${projectId}${ext}`;
+  const fakePath = `${user.id}/${projectId}${safeExt}`;
   return NextResponse.json({ ok: true, path: fakePath });
 }

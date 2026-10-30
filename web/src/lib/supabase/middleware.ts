@@ -50,6 +50,22 @@ function isApiPath(pathname: string): boolean {
   return pathname.startsWith("/api/");
 }
 
+/**
+ * The Supabase `setAll` cookie callback below only ever writes rotated
+ * session cookies onto the local `response` variable, and the plain
+ * pass-through path (`return response`) picks those up automatically.
+ * Every other branch below returns a BRAND NEW NextResponse (401 JSON,
+ * redirect to /login, redirect to /) — without copying `response`'s
+ * cookies onto it first, a token refresh that happened during
+ * `getUser()` gets silently discarded on those paths. The browser keeps
+ * the stale cookie, and since Supabase rotates refresh tokens, repeating
+ * this on the next request eventually logs the user out.
+ */
+function withCookies(from: NextResponse, to: NextResponse): NextResponse {
+  from.cookies.getAll().forEach((cookie) => to.cookies.set(cookie));
+  return to;
+}
+
 
 export async function updateSession(request: NextRequest) {
   // Defensive: if env vars aren't bundled correctly (Electron build with
@@ -97,9 +113,9 @@ export async function updateSession(request: NextRequest) {
 
     if (!user && !isPublic) {
       if (isApiPath(pathname)) {
-        return NextResponse.json(
-          { ok: false, error: "Not signed in" },
-          { status: 401 }
+        return withCookies(
+          response,
+          NextResponse.json({ ok: false, error: "Not signed in" }, { status: 401 })
         );
       }
       // Anonymous → /login, with the original target as `next` so we can
@@ -107,14 +123,14 @@ export async function updateSession(request: NextRequest) {
       const redirectUrl = request.nextUrl.clone();
       redirectUrl.pathname = "/login";
       redirectUrl.searchParams.set("next", pathname);
-      return NextResponse.redirect(redirectUrl);
+      return withCookies(response, NextResponse.redirect(redirectUrl));
     }
 
     if (user && (pathname === "/login" || pathname === "/signup")) {
       // Already signed in → don't show the auth screens, send them home.
       const redirectUrl = request.nextUrl.clone();
       redirectUrl.pathname = "/";
-      return NextResponse.redirect(redirectUrl);
+      return withCookies(response, NextResponse.redirect(redirectUrl));
     }
 
     return response;

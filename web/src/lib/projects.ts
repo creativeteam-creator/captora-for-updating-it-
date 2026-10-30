@@ -39,6 +39,10 @@ export interface ProjectRecord {
   title: string;
   createdAt: number;                 // ms — converted from ISO at fetch
   updatedAt: number;
+  /** Optimistic-concurrency token (see migrations/010_project_version.sql).
+   *  `null` when the migration hasn't been applied yet — updateProject()
+   *  falls back to its old unconditional-write behaviour in that case. */
+  version: number | null;
 
   // Source media
   sourcePath: string | null;         // bucket path, e.g. "<uid>/<id>.mp3"
@@ -90,10 +94,22 @@ export async function listProjects(): Promise<ProjectRecord[]> {
   // helpers expect. Schema is correct at runtime; cast keeps TS quiet.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const sb: any = supabase;
+  // Explicit limit, well above any realistic near-term project count for
+  // a small clinic team — PostgREST's own default max-rows cap (1000)
+  // otherwise truncates silently with no error and no indication
+  // anything was cut off, and since results are newest-first, it's the
+  // OLDEST projects that would quietly disappear first.
+  const LIST_PROJECTS_LIMIT = 2000;
   const { data, error } = await sb
     .from("projects")
     .select("*")
-    .order("created_at", { ascending: false });
+    .order("created_at", { ascending: false })
+    .limit(LIST_PROJECTS_LIMIT);
+  if (!error && Array.isArray(data) && data.length === LIST_PROJECTS_LIMIT) {
+    console.warn(
+      `[projects] listProjects() hit its ${LIST_PROJECTS_LIMIT}-row limit — older projects may be missing from this list.`
+    );
+  }
   if (error) {
     console.warn("[projects] list failed:", error.message);
     return [];
@@ -119,6 +135,32 @@ export async function getProject(id: string): Promise<ProjectRecord | null> {
  * route owns INSERTs because they need server-side validation + storage
  * uploads — clients only update existing rows.
  */
+export interface UpdateProjectResult {
+  /** New version after a successful write, or the unchanged version on
+   *  a conflict. `null` when the version column isn't available yet
+   *  (migration 010 not applied) — caller just keeps going unprotected,
+   *  same as before this fix existed. */
+  version: number | null;
+  /** True when `expectedVersion` was passed and didn't match the row's
+   *  current version — someone else's write landed first and this
+   *  patch was NOT applied, to avoid silently overwriting it. */
+  conflict: boolean;
+}
+
+/**
+ * Patch a project row (style edits, title, etc.). The /api/transcribe
+ * route owns INSERTs because they need server-side validation + storage
+ * uploads — clients only update existing rows.
+ *
+ * `expectedVersion`, when provided, makes the write conditional: it only
+ * applies if the row's `version` still matches what the caller last saw.
+ * Several of these fields (line_animations, line_styles, word_sizes,
+ * userBreaks) are FULL-REPLACE, not merged — the same project open in a
+ * second tab/device holding a stale in-memory snapshot would otherwise
+ * silently clobber whatever the first tab just saved. Pass it when you
+ * have one; omit it for call sites that don't track a version (keeps
+ * the old unconditional behaviour).
+ */
 export async function updateProject(
   id: string,
   patch: {
@@ -137,8 +179,9 @@ export async function updateProject(
     wordSizes?: Record<string, number>;
     /** Forced line-break word indexes — replaces the existing list. */
     userBreaks?: number[];
-  }
-): Promise<void> {
+  },
+  expectedVersion?: number
+): Promise<UpdateProjectResult> {
   const supabase = createClient();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const sb: any = supabase;
@@ -152,10 +195,39 @@ export async function updateProject(
   if (patch.lineStyles !== undefined) dbPatch.line_styles = patch.lineStyles;
   if (patch.wordSizes !== undefined) dbPatch.word_sizes = patch.wordSizes;
   if (patch.userBreaks !== undefined) dbPatch.user_breaks = patch.userBreaks;
-  if (Object.keys(dbPatch).length === 0) return;
+  if (Object.keys(dbPatch).length === 0) return { version: expectedVersion ?? null, conflict: false };
+
+  if (typeof expectedVersion === "number") {
+    const { data, error } = await sb
+      .from("projects")
+      .update({ ...dbPatch, version: expectedVersion + 1 })
+      .eq("id", id)
+      .eq("version", expectedVersion)
+      .select("version")
+      .maybeSingle();
+    if (error) {
+      // `version` column doesn't exist yet — migration 010 hasn't been
+      // run. Fall back to the pre-existing unconditional write rather
+      // than breaking every save until it is.
+      if (/column .*version.* does not exist/i.test(error.message)) {
+        const { error: fallbackErr } = await sb.from("projects").update(dbPatch).eq("id", id);
+        if (fallbackErr) throw new Error(`updateProject: ${fallbackErr.message}`);
+        return { version: null, conflict: false };
+      }
+      throw new Error(`updateProject: ${error.message}`);
+    }
+    if (!data) {
+      // No row matched (id + version) — another session's write already
+      // bumped the version since we last read it. Don't apply this
+      // patch on top of data we haven't seen.
+      return { version: expectedVersion, conflict: true };
+    }
+    return { version: (data as { version: number }).version, conflict: false };
+  }
 
   const { error } = await sb.from("projects").update(dbPatch).eq("id", id);
   if (error) throw new Error(`updateProject: ${error.message}`);
+  return { version: null, conflict: false };
 }
 
 export async function deleteProject(id: string): Promise<void> {
@@ -331,6 +403,7 @@ async function rowToRecord(
     title: row.title,
     createdAt: new Date(row.created_at).getTime(),
     updatedAt: new Date(row.updated_at).getTime(),
+    version: typeof row.version === "number" ? row.version : null,
 
     sourcePath: row.source_path,
     sourceUrl,
@@ -395,7 +468,18 @@ async function rowToRecord(
  * differently in each mode.
  *
  * Desktop absolute paths are returned as-is: they're for
- * `revealInOSFileManager`, not for an <a href>.
+ * `revealInOSFileManager`, not for an <a href>. BUT only when we're
+ * actually running inside the desktop shell right now — the same
+ * `isElectron()` guard `sourcePath` resolution already uses a few lines
+ * below (`skipSourceSignedUrl`). Without it, a project rendered on
+ * desktop and later opened from a browser (same account, different
+ * machine/session) got its raw local filesystem path — e.g.
+ * `C:\Users\...\out.mp4` — handed back as if it were a usable URL. Any
+ * caller gating on "renderUrl is truthy → show a download/open link"
+ * would render a link that can never work in a browser tab, with
+ * nothing telling the user why. Treating it as "no render available"
+ * instead is honest: from a browser, that file genuinely isn't
+ * reachable.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function resolveRenderUrl(
@@ -408,7 +492,7 @@ async function resolveRenderUrl(
   // ("C:\…") and POSIX absolute paths ("/Users/…") both land here; a
   // storage key is always "<uuid>/<uuid><ext>" with no leading slash.
   if (/^[a-zA-Z]:[\\/]/.test(raw) || raw.startsWith("/") || raw.startsWith("\\")) {
-    return raw;
+    return isElectron() ? raw : null;
   }
   return signedUrl(supabase, RENDERS_BUCKET, raw);
 }

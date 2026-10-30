@@ -9,9 +9,11 @@
  */
 
 import { useRef, useState } from "react";
+import { MAX_SOURCE_UPLOAD_BYTES } from "@/lib/supabase/storage";
 
 const ACCEPT = "video/*,audio/*";
 const ADVERTISED_FORMATS = "MP4, MOV, MP3, WAV, M4A";
+const MAX_SOURCE_UPLOAD_GB = (MAX_SOURCE_UPLOAD_BYTES / 1024 / 1024 / 1024).toFixed(0);
 
 interface Props {
   onFile: (file: File) => void;
@@ -21,9 +23,27 @@ interface Props {
 export function UploadHero({ onFile, disabled }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
+  const [sizeError, setSizeError] = useState<string | null>(null);
 
   const handle = (file: File | null | undefined) => {
     if (!file || disabled) return;
+    // The only enforcement used to be storage.ts's server-side check
+    // inside uploadSourceFromBrowser — reached only after the file had
+    // already gone through thumbnail generation, dimension probing, and
+    // waveform decoding in the Prepare Media flow. A user with a 3 GB
+    // file got no feedback until all of that finished, then a rejection
+    // that felt disconnected from the moment they picked the file. The
+    // advertised "1GB" label below was also just wrong: the real,
+    // enforced limit is MAX_SOURCE_UPLOAD_BYTES (2 GB), one shared
+    // constant with the server check, so the two can't drift again.
+    if (file.size > MAX_SOURCE_UPLOAD_BYTES) {
+      setSizeError(
+        `That file is ${(file.size / 1024 / 1024 / 1024).toFixed(2)} GB — over the ${MAX_SOURCE_UPLOAD_GB} GB limit.`
+      );
+      if (inputRef.current) inputRef.current.value = "";
+      return;
+    }
+    setSizeError(null);
     onFile(file);
     if (inputRef.current) inputRef.current.value = "";
   };
@@ -65,8 +85,11 @@ export function UploadHero({ onFile, disabled }: Props) {
         <div className="text-base font-medium text-[var(--text)]">
           Drop your video or audio here or click to upload
         </div>
-        <div className="text-xs text-[var(--text-muted)]">Max: 30:00 minutes, 1GB</div>
+        <div className="text-xs text-[var(--text-muted)]">Max: {MAX_SOURCE_UPLOAD_GB}GB</div>
         <div className="text-xs text-[var(--text-muted)]">Supports: {ADVERTISED_FORMATS}</div>
+        {sizeError && (
+          <div className="text-xs font-medium text-rose-400">{sizeError}</div>
+        )}
       </div>
     </div>
   );

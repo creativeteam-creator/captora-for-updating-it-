@@ -28,7 +28,10 @@ interface Options {
 
 /** Format a seconds float as SRT timestamp "HH:MM:SS,mmm". */
 function formatSrtTime(seconds: number): string {
-  const total = Math.max(0, seconds);
+  // A word with corrupted/missing start-end (upstream provider glitch)
+  // would otherwise silently emit "NaN:NaN:NaN,NaN" straight into the
+  // downloaded subtitle file with no validation anywhere in the chain.
+  const total = Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
   const h = Math.floor(total / 3600);
   const m = Math.floor((total % 3600) / 60);
   const s = Math.floor(total % 60);

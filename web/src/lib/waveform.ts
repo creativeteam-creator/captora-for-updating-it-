@@ -78,6 +78,19 @@ export async function decodePeaks(
   if (!pending) {
     pending = decodeFileToMono(file);
     FILE_CACHE.set(file, pending);
+    // If the decode fails (a suspended AudioContext from an autoplay-
+    // policy gesture requirement, a one-off "Unable to decode audio
+    // data" on a borderline container, momentary loss of the audio
+    // device), the REJECTED promise was previously left in the cache
+    // forever — every later call for this same File re-awaited the
+    // same broken promise with no way to recover short of a full page
+    // reload, even though a plain retry might well succeed. Evict on
+    // failure so the next call gets a fresh attempt. The identity
+    // check guards against evicting a NEWER promise in the rare case
+    // this File was somehow re-queued before the rejection settled.
+    pending.catch(() => {
+      if (FILE_CACHE.get(file) === pending) FILE_CACHE.delete(file);
+    });
   }
   const entry = await pending;
 

@@ -18,15 +18,28 @@ export function useUser(): { user: User | null; loading: boolean } {
     const supabase = createClient();
 
     let mounted = true;
+    // `mounted` only guards against unmount — it says nothing about
+    // ORDER. onAuthStateChange fires synchronously off Supabase's
+    // cross-tab storage-event broadcast, so a sign-out in another tab
+    // can land here before this tab's own initial getUser() network
+    // round-trip resolves. Without this flag, that getUser() response
+    // — now stale — would land afterward and unconditionally overwrite
+    // the correct (signed-out) state with the cached user it fetched
+    // before the sign-out happened. `receivedAuthEvent` makes the first
+    // real auth event authoritative and makes the initial fetch a
+    // no-op once one has arrived.
+    let receivedAuthEvent = false;
     supabase.auth.getUser().then(({ data }) => {
-      if (!mounted) return;
+      if (!mounted || receivedAuthEvent) return;
       setUser(data.user);
       setLoading(false);
     });
 
     const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
       if (!mounted) return;
+      receivedAuthEvent = true;
       setUser(session?.user ?? null);
+      setLoading(false);
     });
 
     return () => {

@@ -28,6 +28,11 @@ export function AuthForm({ mode }: Props) {
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    // The disabled={busy} on the submit button only takes effect after
+    // React commits the next render — not synchronously with this
+    // handler — so a fast double-click/double-Enter could still fire
+    // signInWithPassword/signUp twice concurrently without this guard.
+    if (busy) return;
     setBusy(true);
     setError(null);
     setInfo(null);

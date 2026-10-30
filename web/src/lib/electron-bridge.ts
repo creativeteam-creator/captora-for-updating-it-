@@ -38,6 +38,10 @@ interface CaptoraBridge {
    *  Optional — older installed builds don't expose it, and the app
    *  must keep working when a user is a few versions behind. */
   drainEvents?: () => Promise<unknown[]>;
+  /** Force a fresh capability probe (Python / faster-whisper / GPU /
+   *  internet), bypassing the 7-day cache. Optional for the same
+   *  older-build reason as `drainEvents`. */
+  recheckCapabilities?: () => Promise<unknown>;
   isDesktop: true;
 }
 
@@ -175,5 +179,22 @@ export async function drainDesktopEvents(): Promise<unknown[]> {
   } catch (err) {
     console.warn("[drainDesktopEvents] failed:", err);
     return [];
+  }
+}
+
+/**
+ * Force a fresh capability probe on the desktop shell. Returns null in
+ * pure web mode, on an installed build predating this IPC, or on
+ * failure — the caller (SettingsModal) treats null as "couldn't
+ * recheck" rather than throwing into the UI.
+ */
+export async function recheckDesktopCapabilities(): Promise<unknown | null> {
+  const bridge = getBridge();
+  if (!bridge?.recheckCapabilities) return null;
+  try {
+    return await bridge.recheckCapabilities();
+  } catch (err) {
+    console.warn("[recheckDesktopCapabilities] failed:", err);
+    return null;
   }
 }

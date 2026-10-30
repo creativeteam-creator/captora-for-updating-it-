@@ -18,6 +18,7 @@
 import { spawn } from "child_process";
 import { resolve } from "path";
 import type { WhisperResult, WhisperWord } from "./whisper";
+import { WHISPER_ISO_CODE } from "./languages";
 
 const PYTHON_CMD = process.env.FASTER_WHISPER_PYTHON || "python";
 const MODEL_NAME = process.env.FASTER_WHISPER_MODEL || "large-v3";
@@ -40,22 +41,10 @@ const SCRIPT_PATH = resolve(process.cwd(), "..", "scripts", "whisper_gpu.py");
 /**
  * Whisper accepts ISO 639-1 codes ("hi", "en", "es", ...). Map our
  * spokenLanguage values to those. Synthetic "hi-roman" uses Hindi audio
- * with Roman post-processing applied later by the router.
+ * with Roman post-processing applied later by the router. Shared table —
+ * see languages.ts.
  */
-const ISO_CODE: Record<string, string> = {
-  english: "en",       spanish: "es",      french: "fr",      german: "de",
-  italian: "it",       portuguese: "pt",   dutch: "nl",       russian: "ru",
-  ukrainian: "uk",     polish: "pl",       czech: "cs",       slovak: "sk",
-  hungarian: "hu",     romanian: "ro",     greek: "el",       turkish: "tr",
-  arabic: "ar",        hebrew: "he",       persian: "fa",     japanese: "ja",
-  korean: "ko",        chinese: "zh",      cantonese: "yue",  vietnamese: "vi",
-  thai: "th",          indonesian: "id",   malay: "ms",       tagalog: "tl",
-  swedish: "sv",       danish: "da",       norwegian: "no",   finnish: "fi",
-  hindi: "hi",         "hi-roman": "hi",   marathi: "mr",     bengali: "bn",
-  tamil: "ta",         telugu: "te",       kannada: "kn",     malayalam: "ml",
-  gujarati: "gu",      punjabi: "pa",      urdu: "ur",        nepali: "ne",
-  sanskrit: "sa",      assamese: "as",     sinhala: "si",
-};
+const ISO_CODE = WHISPER_ISO_CODE;
 
 interface Options {
   filePath: string;
@@ -108,6 +97,28 @@ export async function transcribeWithFasterWhisper(opts: Options): Promise<Whispe
 
     let stdout = "";
     let stderr = "";
+    let settled = false;
+
+    // GPU transcription runs 5-10x realtime, so even a long clinic
+    // consultation finishes well inside this window. Without a timeout
+    // here, a stuck CUDA driver / hung model download used to block the
+    // whole /api/transcribe request until Next's own route ceiling (30
+    // min) killed it — defeating the router's "fail fast, fall back to
+    // the next provider" design for every provider after this one.
+    const TIMEOUT_MS = 15 * 60_000;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      proc.kill();
+      reject(new Error(`faster-whisper timed out after ${TIMEOUT_MS / 60_000}min`));
+    }, TIMEOUT_MS);
+    const settle = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn();
+    };
+
     proc.stdout.on("data", (d: Buffer) => { stdout += d.toString(); });
     proc.stderr.on("data", (d: Buffer) => {
       const chunk = d.toString();
@@ -118,22 +129,22 @@ export async function transcribeWithFasterWhisper(opts: Options): Promise<Whispe
     });
 
     proc.on("error", (err) => {
-      reject(new Error(
+      settle(() => reject(new Error(
         `faster-whisper spawn failed: ${err.message}. ` +
         `Verify Python is on PATH or set FASTER_WHISPER_PYTHON env var.`
-      ));
+      )));
     });
 
     proc.on("close", (code) => {
       if (code !== 0) {
-        reject(new Error(`faster-whisper exit ${code}: ${stderr.slice(-400) || "(no stderr)"}`));
+        settle(() => reject(new Error(`faster-whisper exit ${code}: ${stderr.slice(-400) || "(no stderr)"}`)));
         return;
       }
       let data: RawOutput;
       try {
         data = JSON.parse(stdout) as RawOutput;
       } catch {
-        reject(new Error(`faster-whisper produced non-JSON output: ${stdout.slice(0, 200)}`));
+        settle(() => reject(new Error(`faster-whisper produced non-JSON output: ${stdout.slice(0, 200)}`)));
         return;
       }
 
@@ -147,13 +158,13 @@ export async function transcribeWithFasterWhisper(opts: Options): Promise<Whispe
         `[faster-whisper] ok in ${Date.now() - t0}ms — words=${words.length} duration=${data.duration}s lang=${data.language}`
       );
 
-      resolveP({
+      settle(() => resolveP({
         task: opts.translateToEnglish ? "translate" : "transcribe",
         language: data.language || opts.spokenLanguage,
         duration: data.duration ?? 0,
         text: data.text ?? "",
         words,
-      });
+      }));
     });
   });
 }

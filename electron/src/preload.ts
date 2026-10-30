@@ -81,6 +81,15 @@ contextBridge.exposeInMainWorld("captora", {
   drainEvents: (): Promise<unknown[]> =>
     ipcRenderer.invoke("captora:drainEvents"),
 
+  /** Force a fresh probe of Python / faster-whisper / GPU / internet,
+   *  bypassing the normal 7-day cache — for a user who just installed
+   *  Python and doesn't want to wait a week for GPU mode to kick in.
+   *  Only updates the on-disk cache; the running embedded server keeps
+   *  whatever env it started with, so the caller (Settings modal)
+   *  tells the user to restart Captora afterward. */
+  recheckCapabilities: (): Promise<unknown> =>
+    ipcRenderer.invoke("captora:recheckCapabilities"),
+
   /** Tells the renderer it's running inside the desktop wrapper —
    *  flips small UI bits (e.g. show "Open output folder" instead
    *  of "Download" after render). */

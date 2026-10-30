@@ -646,7 +646,18 @@ export async function transliterateWordsToHinglish(
         );
         const skippedWords = skippedIndices.map((idx) => llmResult[idx]);
         try {
-          const cleanup = await transliterateBatch(skippedWords, provider);
+          // Chunk through the same batchSize as the main pass — sending
+          // all skipped words in one oversized request (e.g. 200+ words
+          // to Groq, which is tuned for 100) reproduces the exact
+          // drop/merge failure mode this cleanup pass exists to fix.
+          const cleanupChunks = chunkArray(skippedWords, batchSize);
+          const cleanup: WhisperWord[] = [];
+          for (let c = 0; c < cleanupChunks.length; c++) {
+            cleanup.push(...(await transliterateBatch(cleanupChunks[c], provider)));
+            if (c < cleanupChunks.length - 1) {
+              await new Promise((r) => setTimeout(r, 200));
+            }
+          }
           cleanup.forEach((w, j) => {
             llmResult[skippedIndices[j]] = w;
           });
@@ -677,6 +688,16 @@ export async function transliterateWordsToHinglish(
           `[hinglish-llm] applied optitrans regex fallback to ${finalOptitransCount} words ` +
           `the LLM couldn't transliterate after ${2 + 1} passes`
         );
+        // Unlike the daily-quota path, this used to only be console-logged —
+        // a batch that came back mostly garbled (format drift, safety
+        // filter, truncation) still returned as a normal "success" with
+        // no signal to the user that caption quality had degraded.
+        pushWarning({
+          kind: "quality-degraded",
+          provider: provider.name === "anthropic" || provider.name === "openai" ? "all" : provider.name,
+          userOwned: false,
+          message: `${finalOptitransCount} word${finalOptitransCount === 1 ? "" : "s"} LLM se poori tarah transliterate nahi ho paya — academic-style Roman spelling use hui hai. Captions list me manually check kar lo.`,
+        });
       }
 
       // Phonetic-English safety net — catches common rough-Roman
@@ -981,7 +1002,9 @@ clean English spelling, never the phonetic Roman):
     resp = await callLLM(provider, systemPrompt, userPrompt, words.length * 8, ctrl.signal);
   } catch (err) {
     if ((err as Error).name === "AbortError") {
-      throw new Error(`hinglish-llm: ${provider.name} request timed out after 60s`);
+      throw new Error(
+        `hinglish-llm: ${provider.name} request timed out after ${Math.round(timeoutMs / 1000)}s`
+      );
     }
     throw err;
   } finally {
@@ -1129,31 +1152,39 @@ clean English spelling, never the phonetic Roman):
 export async function transliterateTextToHinglish(text: string): Promise<string> {
   if (!text || !isDevanagari(text)) return text;
 
-  let provider: ProviderInfo;
-  try {
-    provider = pickProvider();
-  } catch {
-    return text;
+  // Walk the same provider chain the word-level pipeline uses instead of
+  // a single unguarded call. Previously a transient failure on the
+  // primary provider (e.g. a 503) just returned the original Devanagari
+  // text unchanged, while the word-level `words` array (which does have
+  // full retry + fallback) fell through and succeeded — producing one
+  // "successful" result with clean Hinglish words but a raw Devanagari
+  // `text` field.
+  const chain = buildProviderChain();
+  for (const provider of chain) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 60_000);
+    try {
+      const resp = await callLLM(
+        provider,
+        "Convert the following Hindi text (Devanagari) to natural Hinglish (Roman script). " +
+          "Write it as it would appear in YouTube captions — natural everyday spellings, " +
+          "not academic transliteration. Keep English loanwords in English. " +
+          "Output ONLY the Hinglish text, nothing else.",
+        text,
+        2048,
+        ctrl.signal
+      );
+      if (resp.ok) {
+        const result = resp.text.trim();
+        if (result) return result;
+      }
+      // Falls through to the next provider on a non-ok response or an
+      // empty result.
+    } catch {
+      // Falls through to the next provider on network/timeout errors.
+    } finally {
+      clearTimeout(timer);
+    }
   }
-
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 60_000);
-  try {
-    const resp = await callLLM(
-      provider,
-      "Convert the following Hindi text (Devanagari) to natural Hinglish (Roman script). " +
-        "Write it as it would appear in YouTube captions — natural everyday spellings, " +
-        "not academic transliteration. Keep English loanwords in English. " +
-        "Output ONLY the Hinglish text, nothing else.",
-      text,
-      2048,
-      ctrl.signal
-    );
-    if (!resp.ok) return text;
-    return resp.text.trim() || text;
-  } catch {
-    return text;
-  } finally {
-    clearTimeout(timer);
-  }
+  return text;
 }

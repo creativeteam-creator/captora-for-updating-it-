@@ -83,6 +83,7 @@ export type Database = {
 
           created_at: string;
           updated_at: string;
+          version: number;
         };
         Insert: {
           id?: string;

@@ -84,13 +84,23 @@ export function indicToRoman(text: string, sourceScript: string): string {
   // Regex: \b\w{2,}[cons]-a-[suffix]\b  meaning the word must be ≥4 chars total.
 
   // Pronoun + postposition suffixes  (ap-ane, jin-ake, un-ake, is-ake …)
+  //
+  // The "-ana" and "-aka" rules below produce a replacement that itself
+  // ends in a bare consonant+"a" ("na", "ka") — exactly the shape the
+  // word-final schwa-deletion regex further down (line ~106) targets.
+  // Without a guard, "karana" → "karna" (correct) → "karn" (wrong,
+  // stripped a second time), and "kisaka" → "kiska" (correct) →
+  // "kisk" (wrong). We mark those two replacements with a control
+  // character the final regex can't match past, then strip the marker
+  // once the final-schwa pass has run.
+  const PROTECT = "";
   s = s.replace(/\b(\w{2,}[bcdfghjklmnpqrstvwxyzBCDFGHJKLMNPQRSTVWXYZ])ane\b/g, "$1ne");
   s = s.replace(/\b(\w{2,}[bcdfghjklmnpqrstvwxyzBCDFGHJKLMNPQRSTVWXYZ])ani\b/g, "$1ni");
-  s = s.replace(/\b(\w{2,}[bcdfghjklmnpqrstvwxyzBCDFGHJKLMNPQRSTVWXYZ])ana\b/g, "$1na");
+  s = s.replace(/\b(\w{2,}[bcdfghjklmnpqrstvwxyzBCDFGHJKLMNPQRSTVWXYZ])ana\b/g, `$1na${PROTECT}`);
   s = s.replace(/\b(\w{2,}[bcdfghjklmnpqrstvwxyzBCDFGHJKLMNPQRSTVWXYZ])ake\b/g, "$1ke");
   s = s.replace(/\b(\w{2,}[bcdfghjklmnpqrstvwxyzBCDFGHJKLMNPQRSTVWXYZ])aki\b/g, "$1ki");
   s = s.replace(/\b(\w{2,}[bcdfghjklmnpqrstvwxyzBCDFGHJKLMNPQRSTVWXYZ])ako\b/g, "$1ko");
-  s = s.replace(/\b(\w{2,}[bcdfghjklmnpqrstvwxyzBCDFGHJKLMNPQRSTVWXYZ])aka\b/g, "$1ka");
+  s = s.replace(/\b(\w{2,}[bcdfghjklmnpqrstvwxyzBCDFGHJKLMNPQRSTVWXYZ])aka\b/g, `$1ka${PROTECT}`);
   // Verb inflection suffixes  (sak-ate, dikh-ate, rah-ate …)
   s = s.replace(/\b(\w{2,}[bcdfghjklmnpqrstvwxyzBCDFGHJKLMNPQRSTVWXYZ])ate\b/g, "$1te");
   s = s.replace(/\b(\w{2,}[bcdfghjklmnpqrstvwxyzBCDFGHJKLMNPQRSTVWXYZ])ati\b/g, "$1ti");
@@ -104,6 +114,7 @@ export function indicToRoman(text: string, sourceScript: string): string {
   //   "merA"   → "merA"    (kept: मेरा = "mera", final A is the long vowel)
   //   "AdhAra" → "AdhAr"   (correct: आधार = "adhar")
   s = s.replace(/(\S{2,}?[^aeiouAEIOU\s])a(?=\s|$|[.,;:!?])/g, "$1");
+  s = s.replace(//g, "");
   return polishRomanHindi(s.toLowerCase());
 }
 

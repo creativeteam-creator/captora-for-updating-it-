@@ -7,10 +7,96 @@
 
 import type { WhisperWord } from "./whisper";
 
+/**
+ * Two centisecond-key strings (the `(word.start * 100) | 0` convention
+ * used throughout the editor for lineAnimations / lineStyles /
+ * lineOverrides / wordSizes / selectedLineKey) are "the same line"
+ * within ±500ms. Mirrors the tolerance the renderer's own
+ * `resolveLineOverride` / `resolveLineStyle` already use server-side
+ * (remotion/src/components/CaptionsTimeline.tsx) and CaptionsList's
+ * `resolveOverrideKey` uses for lineAnimations — this just makes the
+ * same tolerance available wherever a raw `===` comparison is used
+ * instead.
+ *
+ * Needed because deleting a line's first word changes which word is
+ * "first" for that line, so its centisecond key shifts by however long
+ * the deleted word was. Without fuzzy matching, `selectedLineKey`
+ * (frozen at the moment the user clicked) silently stops matching any
+ * line at all — the selection ring disappears and any per-line
+ * template/override the user had picked stops applying, with nothing
+ * in the UI explaining why.
+ */
+export function lineKeysAreClose(a: string, b: string, toleranceCentisec = 50): boolean {
+  return Math.abs(Number(a) - Number(b)) <= toleranceCentisec;
+}
+
+/**
+ * Look up `table[key]`, falling back to the nearest key within ±500ms
+ * (see `lineKeysAreClose`) when there's no exact entry. Generic over the
+ * value type so the same helper serves `lineStyles`
+ * (`Record<string, CaptionStyleId>`) and `lineOverrides`
+ * (`Record<string, CaptionStyleOverrides>`) alike.
+ */
+export function lookupNearLineKey<T>(
+  table: Record<string, T> | undefined,
+  key: string | null | undefined,
+  toleranceCentisec = 50
+): T | undefined {
+  if (!table || !key) return undefined;
+  if (key in table) return table[key];
+  const target = Number(key);
+  let best: { delta: number; value: T } | null = null;
+  for (const [k, v] of Object.entries(table)) {
+    const delta = Math.abs(Number(k) - target);
+    if (delta > toleranceCentisec) continue;
+    if (!best || delta < best.delta) best = { delta, value: v };
+  }
+  return best?.value;
+}
+
 export interface CaptionLine {
   /** Index in the source `words` array of the first word in this line. */
   startIndex: number;
   words: WhisperWord[];
+}
+
+/**
+ * Remap `userBreaks` (word-index-keyed forced line breaks) after a
+ * `words.splice(spliceStart, deleteCount, ...insertedItems)`-shaped edit.
+ *
+ * `userBreaks` records "start a new line after word i" as a raw array
+ * index. Every editor mutation that inserts or removes words — splitting
+ * a word into two, deleting a word, inserting a new one, deleting a
+ * whole line — shifts every LATER word's index without this ever being
+ * updated, so a break the user placed after "like" in "I really like
+ * pizza" would silently land after "pizza" instead once an earlier edit
+ * inserted a word. `applyCaptionTrim` already had to solve exactly this
+ * for the IN/OUT trim case; this is the same fix generalised to every
+ * splice-shaped edit so it isn't re-solved (or missed) at each call site.
+ *
+ * A break whose word fell INSIDE the deleted/replaced region is dropped
+ * rather than reattached to a neighbour — the specific word the user
+ * anchored it to is gone, and silently moving it to an unrelated word
+ * is worse than losing it. Same-length replacements (delete 1, insert 1
+ * — a pure text edit) are a no-op here since no index actually shifts.
+ */
+export function remapUserBreaksAfterSplice(
+  userBreaks: Iterable<number>,
+  spliceStart: number,
+  deleteCount: number,
+  insertCount: number
+): Set<number> {
+  const delta = insertCount - deleteCount;
+  const next = new Set<number>();
+  for (const idx of userBreaks) {
+    if (idx < spliceStart) {
+      next.add(idx);
+    } else if (idx >= spliceStart + deleteCount) {
+      next.add(idx + delta);
+    }
+    // else: idx falls inside the edited region — dropped.
+  }
+  return next;
 }
 
 interface GroupOptions {
@@ -80,7 +166,13 @@ export function applyCaptionTrim(
 
   for (let i = 0; i < words.length; i++) {
     const w = words[i];
-    if (inSec != null && w.start < inSec) continue;
+    // Symmetric with the outSec check below: a word straddling the IN
+    // point (started slightly before it but still mostly plays after)
+    // is kept, not dropped. The old `w.start < inSec` check dropped any
+    // word that had started before the cut even if most of its audio
+    // played after it — e.g. start=4.9/end=5.5 with inSec=5.0 got
+    // dropped entirely, leaving a caption gap right where audio starts.
+    if (inSec != null && w.end <= inSec) continue;
     if (outSec != null && w.start > outSec) continue;
     // Record the break at this word's NEW index before pushing it, so
     // the stored value indexes into `keptWords`, not the source array.

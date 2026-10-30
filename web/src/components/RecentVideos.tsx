@@ -44,6 +44,12 @@ function MoreIcon() {
 
 export function RecentVideos({ projects, query, onOpen, onDelete }: Props) {
   const [openMenu, setOpenMenu] = useState<string | null>(null);
+  // Thumbnails are signed URLs (see resolveThumbnail in lib/projects.ts)
+  // and those expire. Without this, an expired one left a permanently
+  // broken-image icon in the grid — the <img> had no onError, so
+  // nothing ever fell back to the placeholder every other card without
+  // a thumbnail already shows.
+  const [brokenThumbs, setBrokenThumbs] = useState<Set<string>>(new Set());
 
   const filtered = query
     ? projects.filter((p) => p.title.toLowerCase().includes(query.toLowerCase()))
@@ -68,12 +74,15 @@ export function RecentVideos({ projects, query, onOpen, onDelete }: Props) {
                 className="relative overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] transition hover:border-[var(--accent)]"
                 style={{ aspectRatio: "9 / 16" }}
               >
-                {project.thumbnail ? (
+                {project.thumbnail && !brokenThumbs.has(project.id) ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
                     src={project.thumbnail}
                     alt={project.title}
                     className="h-full w-full object-cover"
+                    onError={() =>
+                      setBrokenThumbs((prev) => new Set(prev).add(project.id))
+                    }
                   />
                 ) : (
                   <div className="flex h-full w-full flex-col items-center justify-center gap-2">

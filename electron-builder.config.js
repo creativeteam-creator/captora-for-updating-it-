@@ -62,9 +62,23 @@ const winSigned = winCertPresent || winAzurePresent;
  * into the app so the updater can pick the right install strategy at
  * runtime. Each CI runner builds one platform, so a single flag is
  * unambiguous.
+ *
+ * macOS requires BOTH `macCertPresent` AND `macNotarizeReady` — a
+ * codesigned-but-unnotarized build is still exactly what Gatekeeper
+ * blocks on first launch ("Apple could not verify this app is free of
+ * malware"), the same failure mode the unsigned path's manual-download
+ * fallback exists to route around. `signed` used to be `macCertPresent`
+ * alone (see the mac `identity`/`notarize` config below, which already
+ * correctly treats signing and notarization as separate knobs); a CI
+ * run with a cert but a missing/expired notarization secret produced a
+ * build that reported `captoraSigned: true`, and autoUpdate.ts trusted
+ * that to mean "let Squirrel.Mac's native download-and-restart flow
+ * handle it" — exactly the case where an update install could hit
+ * Gatekeeper mid-flow with no fallback wired up for it.
  */
+const macSigned = macCertPresent && macNotarizeReady;
 const signed =
-  process.platform === "darwin" ? macCertPresent : process.platform === "win32" ? winSigned : false;
+  process.platform === "darwin" ? macSigned : process.platform === "win32" ? winSigned : false;
 
 // Log the resolved posture — CI logs then answer "why is this build
 // unsigned?" without anyone having to reverse-engineer the env.

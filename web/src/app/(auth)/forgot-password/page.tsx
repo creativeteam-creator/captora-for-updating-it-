@@ -21,6 +21,7 @@ export default function ForgotPasswordPage() {
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (busy) return;
     setBusy(true);
     setError(null);
     const supabase = createClient();

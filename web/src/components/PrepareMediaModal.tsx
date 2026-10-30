@@ -63,7 +63,16 @@ export function PrepareMediaModal({ file, onClose, onGenerate }: Props) {
   const [langDropdownOpen, setLangDropdownOpen] = useState(false);
   const [scriptDropdownOpen, setScriptDropdownOpen] = useState(false);
 
-  const mediaKind = file ? detectMediaKind("." + (file.name.split(".").pop() || "mp3")) : "video";
+  // `"somefile".split(".").pop()` returns the whole string ("somefile"),
+  // not "" — the `|| "mp3"` fallback below only ever caught a filename
+  // ending in a literal trailing dot. A genuinely extensionless
+  // drag-drop file (e.g. an audio recording named just "recording")
+  // fell through to detectMediaKind("." + "recording"), which isn't a
+  // known audio extension and resolves to "video" — a silent wrong
+  // branch, not the intended mp3 default.
+  const mediaKind = file
+    ? detectMediaKind("." + (file.name.includes(".") ? file.name.split(".").pop() : "mp3"))
+    : "video";
 
   useEffect(() => {
     if (!file) return;
@@ -82,6 +91,10 @@ export function PrepareMediaModal({ file, onClose, onGenerate }: Props) {
 
   const selectedLang = spokenCode ? getSpokenLanguage(spokenCode) : null;
   const langSupportsRoman = selectedLang ? supportsRoman(selectedLang) : false;
+  // Matches ScriptDropdown's own `isLatin` check — for these languages
+  // "native" IS Roman, and the dropdown disables the separate "roman"
+  // option, so "native" is the only real choice.
+  const isLatinScript = selectedLang?.nativeScript === "Latin";
 
   // For Latin-script languages (English, Spanish, etc.) the writing script
   // is always Roman — auto-select it so the user doesn't have to click.
@@ -90,11 +103,16 @@ export function PrepareMediaModal({ file, onClose, onGenerate }: Props) {
     if (selectedLang.code === "hi-roman") {
       // Hinglish is romanised by definition.
       setWritingScript("roman");
-    } else if (!langSupportsRoman) {
-      // Non-romanisable scripts: lock to native.
+    } else if (!langSupportsRoman || isLatinScript) {
+      // Non-romanisable scripts lock to native. Latin-script languages
+      // also lock to native (their own script) — previously only the
+      // `!langSupportsRoman` case was handled, so English/Spanish/etc.
+      // (where langSupportsRoman is true via hasLatinScript) never got
+      // auto-selected and Generate stayed disabled until the user
+      // manually opened the dropdown and clicked "Latin (default)".
       setWritingScript("native");
     }
-  }, [selectedLang, langSupportsRoman]);
+  }, [selectedLang, langSupportsRoman, isLatinScript]);
 
   const canGenerate = !!spokenCode && !!writingScript && !translate
     ? true
@@ -286,6 +304,20 @@ export function PrepareMediaModal({ file, onClose, onGenerate }: Props) {
             </div>
             <p className="text-[10px] text-[var(--text-muted)]">
               First run downloads the model. Bigger = better Hinglish + English mixing accuracy.
+            </p>
+            {/* This tier only controls the LOCAL Whisper model — it has
+                no effect on ElevenLabs, Groq, or Sarvam, none of which
+                have an "accuracy" knob of their own. Those cloud
+                providers are tried first whenever they're configured
+                (see lib/transcribe.ts's pickProviderOrder), so on a
+                typical setup this pick only matters on the rare
+                transcription where every cloud provider fails and the
+                pipeline falls all the way back to local CPU Whisper.
+                Previously nothing told the user that, so picking "Best"
+                looked like it should always sharpen results and instead
+                silently did nothing most of the time. */}
+            <p className="text-[10px] text-[var(--text-muted)]">
+              Only applies to the on-device model — has no effect when a cloud provider (ElevenLabs / Groq / Sarvam) handles the transcription, which is the common case whenever one is configured.
             </p>
           </div>
 

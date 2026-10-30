@@ -48,7 +48,15 @@ export function TelemetryBoot() {
       stack: string | undefined,
       context: Record<string, unknown>
     ) => {
-      const fingerprint = `${event}::${message}`;
+      // Includes `path` (both call sites below always set it) alongside
+      // the message. Generic browser error strings — "Failed to fetch",
+      // "Load failed", "Script error." — are common to many unrelated
+      // call sites; a message-only fingerprint let the FIRST such error
+      // on a page suppress every genuinely different one after it for
+      // the rest of the session, even ones on a completely different
+      // screen with a completely different root cause.
+      const path = typeof context.path === "string" ? context.path : "";
+      const fingerprint = `${event}::${path}::${message}`;
       if (seen.has(fingerprint)) return;
       if (reportCount >= MAX_REPORTS_PER_SESSION) return;
       seen.add(fingerprint);
@@ -96,16 +104,62 @@ export function TelemetryBoot() {
     // rehydrates from cookies a moment after mount, and on a genuine
     // logged-out start the drain simply waits for the sign-in that
     // follows.
-    let drained = false;
+    //
+    // `fileDrained` and "successfully uploaded" are deliberately
+    // tracked separately. eventSpool.ts's own doc comment says a failed
+    // upload should be retryable "within the session" because the
+    // caller (this file) still holds the events in memory — but the
+    // previous version never actually did that: it set `drained = true`
+    // before the upload even ran and never looked at it again, so a
+    // single transient network blip during the flush call silently
+    // dropped every spooled crash for the rest of the session, with no
+    // second attempt. `pendingEvents` holds onto whatever hasn't been
+    // confirmed uploaded yet so both the bounded retry below AND any
+    // later auth-state change (e.g. a user who was on the login screen
+    // when the first attempt failed, and signs in a minute later) get a
+    // real second chance instead of a permanent no-op.
+    let fileDrained = false;
+    let pendingEvents: SpooledEvent[] | null = null;
+    let retriesLeft = 3;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
     const supabase = createClient();
 
+    const attemptFlush = async () => {
+      if (!pendingEvents || pendingEvents.length === 0) return;
+      try {
+        const uploaded = await flushSpooledEvents(pendingEvents);
+        if (uploaded > 0) {
+          pendingEvents = null;
+          return;
+        }
+      } catch {
+        /* best-effort — pendingEvents stays set for the next attempt */
+      }
+      // Still here → this attempt didn't confirm an upload. Schedule a
+      // bounded retry (network blips resolve in seconds, not minutes)
+      // in addition to the auth-state-change trigger below, so the
+      // common "already signed in, one flaky request" case recovers
+      // without needing a second sign-in event that may never come.
+      if (retriesLeft > 0) {
+        retriesLeft--;
+        retryTimer = setTimeout(() => void attemptFlush(), 5000);
+      }
+    };
+
     const drainOnce = async () => {
-      if (drained) return;
-      drained = true;
+      if (fileDrained) {
+        // Spool file already pulled off disk this session — don't
+        // re-drain (there's nothing left there), just retry the
+        // upload if it hasn't succeeded yet.
+        void attemptFlush();
+        return;
+      }
+      fileDrained = true;
       try {
         const events = (await drainDesktopEvents()) as SpooledEvent[];
         if (events.length === 0) return;
-        await flushSpooledEvents(events);
+        pendingEvents = events;
+        await attemptFlush();
       } catch {
         /* best-effort */
       }
@@ -122,6 +176,8 @@ export function TelemetryBoot() {
       });
 
     // Case 2: signed out at launch — drain as soon as they sign in.
+    // Also doubles as a retry trigger if Case 1 already drained the
+    // file but the upload itself failed (see attemptFlush).
     const { data: authSub } = supabase.auth.onAuthStateChange((_event, session) => {
       if (session?.user) void drainOnce();
     });
@@ -130,6 +186,7 @@ export function TelemetryBoot() {
       window.removeEventListener("error", onError);
       window.removeEventListener("unhandledrejection", onRejection);
       authSub.subscription.unsubscribe();
+      if (retryTimer) clearTimeout(retryTimer);
     };
   }, []);
 

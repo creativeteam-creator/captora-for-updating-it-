@@ -26,7 +26,7 @@ export interface RequestKeyOverrides {
  *  daily quota"). Downstream LLM code pushes; the route handler reads
  *  after the transcribe() call returns. */
 export interface RequestWarning {
-  kind: "quota-exhausted" | "all-llm-failed";
+  kind: "quota-exhausted" | "all-llm-failed" | "quality-degraded";
   provider: "gemini" | "groq" | "elevenlabs" | "all";
   /** True when the failing key was the user's own (Settings panel) and
    *  false when it was the bundled shared key. Drives the wording on

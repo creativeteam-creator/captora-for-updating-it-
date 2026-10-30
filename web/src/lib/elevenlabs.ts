@@ -16,6 +16,7 @@ import { readFile, stat, unlink } from "fs/promises";
 import { basename } from "path";
 import type { WhisperResult, WhisperWord } from "./whisper";
 import { extractAudioToMp3 } from "./audio-extract";
+import { WHISPER_ISO_CODE } from "./languages";
 
 /**
  * Files above ~40 MB get the audio-only treatment: we pre-extract a
@@ -34,19 +35,9 @@ const EXTRACT_AUDIO_THRESHOLD_BYTES = 40_000_000;
 
 const ELEVENLABS_BASE = "https://api.elevenlabs.io/v1";
 
-const ISO_CODE: Record<string, string> = {
-  english: "en",       spanish: "es",     french: "fr",      german: "de",
-  italian: "it",       portuguese: "pt",  dutch: "nl",       russian: "ru",
-  ukrainian: "uk",     polish: "pl",      czech: "cs",       slovak: "sk",
-  hungarian: "hu",     romanian: "ro",    greek: "el",       turkish: "tr",
-  arabic: "ar",        hebrew: "he",      persian: "fa",     japanese: "ja",
-  korean: "ko",        chinese: "zh",     cantonese: "yue",  vietnamese: "vi",
-  thai: "th",          indonesian: "id",  malay: "ms",       tagalog: "tl",
-  swedish: "sv",       danish: "da",      norwegian: "no",   finnish: "fi",
-  hindi: "hi",         "hi-roman": "hi",  marathi: "mr",     bengali: "bn",
-  tamil: "ta",         telugu: "te",      kannada: "kn",     malayalam: "ml",
-  gujarati: "gu",      punjabi: "pa",     urdu: "ur",        nepali: "ne",
-};
+// Shared table — see languages.ts. Previously a ~40-language local subset
+// that silently sent no language hint for anything outside it.
+const ISO_CODE = WHISPER_ISO_CODE;
 
 interface Options {
   filePath: string;

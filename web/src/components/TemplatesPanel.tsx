@@ -22,6 +22,7 @@ import {
   type CaptionStyleId,
   type TemplateCategory,
 } from "@/lib/styles";
+import { lookupNearLineKey } from "@/lib/captions";
 
 interface Props {
   selected: CaptionStyleId;
@@ -64,9 +65,11 @@ export function TemplatesPanel({
 
   // The currently-selected line's per-line override (if any), so the
   // matching template card can show a different "ACTIVE FOR THIS LINE"
-  // chip vs the project-wide one.
-  const lineSelectedStyleId =
-    selectedLineKey && lineStyles ? lineStyles[selectedLineKey] : undefined;
+  // chip vs the project-wide one. Fuzzy-matched (±500ms) because
+  // deleting the selected line's first word shifts its key — without
+  // this, the banner would silently fall back to "no per-line style"
+  // even though one was set, right after an otherwise-unrelated edit.
+  const lineSelectedStyleId = lookupNearLineKey(lineStyles, selectedLineKey);
   const effectiveSelected = lineSelectedStyleId ?? selected;
 
   return (

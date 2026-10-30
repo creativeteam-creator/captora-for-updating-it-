@@ -14,6 +14,7 @@ import { readFile, writeFile } from "fs/promises";
 import { existsSync } from "fs";
 import { join } from "path";
 import { createClient } from "@/lib/supabase/server";
+import { reportServerEvent } from "@/lib/telemetry-server";
 
 export const runtime = "nodejs";
 
@@ -148,6 +149,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, from, to });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    console.error("[/api/glossary] POST failed:", msg);
+    // Previously this route had no telemetry at all — a failing write
+    // here (missing table, RLS misconfiguration) returned a 500 the
+    // client silently swallowed (saveGlossaryEntry in CaptionsList.tsx
+    // is intentionally fire-and-forget) with no record anywhere that it
+    // ever happened. render/transcribe/retranscribe all report; this
+    // brings glossary in line.
+    void reportServerEvent({ event: "glossary.failed", message: msg, context: { op: "upsert" } });
     return NextResponse.json({ ok: false, error: msg }, { status: 500 });
   }
 }
@@ -176,6 +185,8 @@ export async function DELETE(req: NextRequest) {
     return NextResponse.json({ ok: true });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    console.error("[/api/glossary] DELETE failed:", msg);
+    void reportServerEvent({ event: "glossary.failed", message: msg, context: { op: "delete" } });
     return NextResponse.json({ ok: false, error: msg }, { status: 500 });
   }
 }

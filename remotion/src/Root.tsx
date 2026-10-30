@@ -54,12 +54,20 @@ function resolveFps(props: CaptionsCompositionProps): number {
  * short by exactly the ratio between them.
  */
 function computeDurationFrames(props: CaptionsCompositionProps, fps: number): number {
+  // A malformed word.end (NaN from an upstream provider glitch) or a
+  // set of words that are all negative enough that lastEnd + buffer < 0
+  // used to reach selectComposition/renderMedia unguarded, surfacing as
+  // Remotion's own internal validation error ("durationInFrames must be
+  // a positive integer") instead of a clear fallback at the source.
+  const fallbackFrames = Math.ceil(TAIL_BUFFER_SEC * fps);
   if (props.durationSec && props.durationSec > 0) {
-    return Math.ceil(props.durationSec * fps);
+    const frames = Math.ceil(props.durationSec * fps);
+    return Number.isFinite(frames) && frames > 0 ? frames : fallbackFrames;
   }
-  if (!props.words.length) return Math.ceil(TAIL_BUFFER_SEC * fps);
+  if (!props.words.length) return fallbackFrames;
   const lastEnd = Math.max(...props.words.map((w) => w.end));
-  return Math.ceil((lastEnd + TAIL_BUFFER_SEC) * fps);
+  const frames = Math.ceil((lastEnd + TAIL_BUFFER_SEC) * fps);
+  return Number.isFinite(frames) && frames > 0 ? frames : fallbackFrames;
 }
 
 /**

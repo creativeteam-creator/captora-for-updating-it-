@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { mkdir, unlink, copyFile } from "fs/promises";
+import { mkdir, unlink, copyFile, utimes } from "fs/promises";
 import { existsSync } from "fs";
 import { join, extname } from "path";
 import { tmpdir } from "os";
@@ -269,6 +269,19 @@ export async function POST(req: NextRequest) {
     try {
       if (localExists) {
         console.log(`[/api/transcribe] using local file: ${localPath}`);
+        // Desktop mode's hourly tempCleanup sweep (electron/src/
+        // tempCleanup.ts) deletes anything untouched for 12h, with no
+        // concept of "a route is currently reading this file". A
+        // source dropped ~11.5h before the user finally hits
+        // transcribe, on a video long enough to keep this route busy
+        // past the top of the next hourly sweep, could get unlinked
+        // mid-read. Touching mtime here is enough to close that gap:
+        // the sweep only runs hourly and this route's own maxDuration
+        // (30 min) is shorter than that, so a fresh touch keeps the
+        // file's age under the 12h threshold for the entire time this
+        // request could possibly still be using it. Best-effort — a
+        // failure here shouldn't block transcription.
+        await utimes(localPath, new Date(), new Date()).catch(() => {});
       } else if (isDesktopMode()) {
         return NextResponse.json(
           {

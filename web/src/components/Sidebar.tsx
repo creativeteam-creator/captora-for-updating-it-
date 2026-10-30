@@ -84,7 +84,24 @@ const MOCK_PLAN: PlanInfo = {
   transcriptionMinsRemaining: 0,
 };
 
-export function Sidebar() {
+interface Props {
+  /**
+   * Called before the sign-out form actually submits, awaited to
+   * completion first. page.tsx passes a function that immediately
+   * pushes every pending debounced Supabase write (style overrides,
+   * line styles/animations, word edits — all normally batched behind a
+   * 400-700ms timer) instead of leaving them to the timer.
+   *
+   * Without this, an edit followed by a sign-out click inside that
+   * window raced the full-page navigation against the timer: the form
+   * POST could unmount the app before the timeout fired, silently
+   * dropping the last edit with no error and no indication it never
+   * saved.
+   */
+  onBeforeSignOut?: () => Promise<void>;
+}
+
+export function Sidebar({ onBeforeSignOut }: Props) {
   const [active, setActive] = useState<NavId>("home");
   const { user } = useUser();
 
@@ -175,7 +192,17 @@ export function Sidebar() {
       {/* User row + logout — pinned below the plan card. Real user data
           from Supabase via useUser(); falls back to "?" while loading. */}
       <div className="border-t border-[var(--border)] px-4 py-3">
-        <form action="/auth/signout" method="post" className="flex items-center gap-3">
+        <form
+          action="/auth/signout"
+          method="post"
+          className="flex items-center gap-3"
+          onSubmit={(e) => {
+            if (!onBeforeSignOut) return; // no editor mounted — nothing to flush
+            e.preventDefault();
+            const form = e.currentTarget;
+            void onBeforeSignOut().finally(() => form.submit());
+          }}
+        >
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[var(--bg-elevated)] text-xs font-bold text-[var(--text)]">
             {userInitials(user)}
           </div>

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { bundle } from "@remotion/bundler";
 import { selectComposition, renderMedia, getVideoMetadata } from "@remotion/renderer";
-import { copyFile, mkdir, readFile, stat, unlink } from "fs/promises";
+import { copyFile, mkdir, readFile, stat, unlink, utimes } from "fs/promises";
 import { createReadStream, existsSync } from "fs";
 import { Readable } from "stream";
 import { join, resolve } from "path";
@@ -161,16 +161,50 @@ function sessionDir(): string {
 const REMOTION_ROOT = resolve(process.cwd(), "..", "remotion");
 const REMOTION_ENTRY = join(REMOTION_ROOT, "src", "index.ts");
 
+// ── Concurrency guards ───────────────────────────────────────────────────
+// Two concurrent renders of the SAME project+style both used to `copyFile`
+// into the same deterministic desktop-mode output path with no lock,
+// racing at the OS write-position level and risking a truncated/corrupt
+// saved file. `inFlightRenders` rejects an exact duplicate outright.
+// `activeRenderCount` separately caps TOTAL concurrent renders (different
+// projects too) — each one spins up its own Chromium instance via the
+// shared bundle, and nothing else in this process limited how many could
+// run at once, risking OOM for the whole Next.js server on a burst of
+// export requests.
+const inFlightRenders = new Set<string>();
+let activeRenderCount = 0;
+const MAX_CONCURRENT_RENDERS = 3;
+
+// The bundle lands in the OS temp dir, which Windows Storage Sense / Disk
+// Cleanup / AV tools can wipe while the server is still running. Caching
+// the path forever then fails every export with "index.html does not
+// exist" until an app restart — so re-verify the folder before each use
+// and rebundle if it's gone. A failed bundle is also dropped from the
+// cache so the next export retries instead of replaying the rejection.
 let bundlePromise: Promise<string> | null = null;
-function getBundle(): Promise<string> {
-  if (!bundlePromise) {
-    console.log(`[/api/render] bundling Remotion entry: ${REMOTION_ENTRY}`);
-    bundlePromise = bundle({ entryPoint: REMOTION_ENTRY }).then((url) => {
-      console.log(`[/api/render] bundle ready: ${url}`);
-      return url;
-    });
+function startBundle(): Promise<string> {
+  console.log(`[/api/render] bundling Remotion entry: ${REMOTION_ENTRY}`);
+  const p = bundle({ entryPoint: REMOTION_ENTRY }).then((url) => {
+    console.log(`[/api/render] bundle ready: ${url}`);
+    return url;
+  });
+  p.catch(() => {
+    if (bundlePromise === p) bundlePromise = null;
+  });
+  bundlePromise = p;
+  return p;
+}
+async function getBundle(): Promise<string> {
+  const cached = bundlePromise ?? startBundle();
+  const url = await cached;
+  if (existsSync(join(url, "index.html"))) return url;
+  // Concurrent exports may all notice the missing folder; only the first
+  // swaps in a new bundle, the rest await that same promise.
+  if (bundlePromise === cached) {
+    console.warn(`[/api/render] cached bundle missing (${url}) — rebundling`);
+    startBundle();
   }
-  return bundlePromise;
+  return bundlePromise ?? startBundle();
 }
 
 interface RenderBody {
@@ -256,7 +290,18 @@ async function ensureLocalSource(
   storagePath: string | null
 ): Promise<string> {
   const cached = join(sessionDir(), `${projectId}${ext}`);
-  if (existsSync(cached)) return cached;
+  if (existsSync(cached)) {
+    // Same reasoning as /api/transcribe's touch: desktop mode's hourly
+    // tempCleanup sweep (electron/src/tempCleanup.ts) has no concept of
+    // "a route is currently reading this file" and deletes anything
+    // untouched for 12h. Touching mtime here closes the gap where a
+    // source sitting near that boundary gets unlinked mid-render — the
+    // sweep only runs hourly and this route's own maxDuration (10 min)
+    // is well under that, so a fresh touch keeps the file safely under
+    // the threshold for as long as this request could still need it.
+    await utimes(cached, new Date(), new Date()).catch(() => {});
+    return cached;
+  }
 
   // In desktop mode the file MUST exist locally (was written via IPC
   // when the user dropped it into the editor). If it's missing here,
@@ -286,6 +331,7 @@ async function ensureLocalSource(
 export async function POST(req: NextRequest) {
   let publicAssetPath: string | null = null;
   let outPath: string | null = null;
+  let lockKey: string | null = null;
 
   try {
     // ───── Auth gate ─────
@@ -325,6 +371,24 @@ export async function POST(req: NextRequest) {
     if (!compositionId) {
       return NextResponse.json({ ok: false, error: `Unknown style: ${style}` }, { status: 400 });
     }
+
+    // ───── Concurrency guards ─────
+    const renderKey = `${projectId}:${style}`;
+    if (inFlightRenders.has(renderKey)) {
+      return NextResponse.json(
+        { ok: false, error: "A render for this project + style is already in progress. Wait for it to finish before exporting again." },
+        { status: 409 }
+      );
+    }
+    if (activeRenderCount >= MAX_CONCURRENT_RENDERS) {
+      return NextResponse.json(
+        { ok: false, error: "Too many renders in progress right now — try again in a moment." },
+        { status: 503 }
+      );
+    }
+    inFlightRenders.add(renderKey);
+    activeRenderCount++;
+    lockKey = renderKey;
 
     // ───── Look up project + locate source media ─────
     const { data: project, error: lookupErr } = await supabase
@@ -532,6 +596,12 @@ export async function POST(req: NextRequest) {
     }
 
     const tRender = Date.now();
+    // Periodic progress logging — the only prior signal of "still working
+    // vs hung" was the open HTTP connection itself. This doesn't give the
+    // client a progress bar, but it makes a stalled render visible in
+    // server logs instead of looking identical to a dead request until
+    // either renderMedia() resolves or the platform's own timeout fires.
+    let lastLoggedPct = -1;
     await renderMedia({
       composition,
       serveUrl,
@@ -543,6 +613,13 @@ export async function POST(req: NextRequest) {
       imageFormat: transparent ? "png" : "jpeg",
       outputLocation: outPath,
       inputProps,
+      onProgress: ({ progress }) => {
+        const pct = Math.floor(progress * 100);
+        if (pct >= lastLoggedPct + 20 || pct === 100) {
+          console.log(`[/api/render] progress: ${pct}% (project=${projectId})`);
+          lastLoggedPct = pct;
+        }
+      },
     });
     console.log(
       `[/api/render] rendered in ${Date.now() - tRender}ms (codec=${codec}${transparent ? " 4444 alpha" : ""})`
@@ -558,6 +635,14 @@ export async function POST(req: NextRequest) {
     // entirely, which is the path multi-GB renders take in practice).
     const renderedStat = await stat(outPath);
     const renderedSize = renderedStat.size;
+    if (renderedSize === 0) {
+      // renderMedia() resolved without throwing but produced nothing —
+      // an ffmpeg/Chromium edge case downstream from what we can detect
+      // earlier. Without this check the route reported "rendered"
+      // (DB status + streamed response) for a broken, empty file with
+      // no way for the user to tell short of playing it back.
+      throw new Error("Render produced an empty output file — the encoder likely failed silently. Try exporting again.");
+    }
 
     // ───── Persist the render ─────
     // WEB mode: upload to Supabase Storage so the user can re-download
@@ -692,6 +777,10 @@ export async function POST(req: NextRequest) {
     }
     return NextResponse.json({ ok: false, error: message }, { status: 500 });
   } finally {
+    if (lockKey) {
+      inFlightRenders.delete(lockKey);
+      activeRenderCount--;
+    }
     if (publicAssetPath) await unlink(publicAssetPath).catch(() => {});
     if (outPath) await unlink(outPath).catch(() => {});
   }

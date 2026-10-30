@@ -38,24 +38,48 @@ export interface Capabilities {
   lastChecked: string;
   /** Captora version when last probed (re-probe on upgrade). */
   appVersion: string;
+  /**
+   * True when at least one probe hit its timeout rather than cleanly
+   * succeeding or failing. A timeout (a hung driver query, a slow DNS
+   * resolution) used to be recorded identically to a genuine negative —
+   * "no GPU", "no internet" — and then cached for a full 7 days with no
+   * way to tell the two apart. `loadOrDetectCapabilities` treats a
+   * cached result with this flag set as always-stale, so a transient
+   * hang gets retried on the next launch instead of sticking around for
+   * a week.
+   */
+  probeIncomplete: boolean;
 }
 
-/** Run a shell command and resolve true if exit code is 0 within `timeoutMs`. */
-function probeCommand(cmd: string, timeoutMs = 5000): Promise<boolean> {
+type ProbeResult = "ok" | "failed" | "timeout";
+
+/** Run a shell command; resolves "ok" (exit 0), "failed" (nonzero /
+ *  error), or "timeout" (killed after `timeoutMs` — a hung process is
+ *  NOT the same claim as a clean failure, and callers need to be able
+ *  to tell them apart). */
+function probeCommand(cmd: string, timeoutMs = 5000): Promise<ProbeResult> {
   return new Promise((resolve) => {
+    let settled = false;
     const child = exec(cmd, { windowsHide: true }, (err) => {
-      if (timer) clearTimeout(timer);
-      resolve(!err);
+      if (settled) return; // already resolved via the timeout branch
+      settled = true;
+      clearTimeout(timer);
+      resolve(err ? "failed" : "ok");
     });
     const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
       try { child.kill(); } catch { /* ignore */ }
-      resolve(false);
+      resolve("timeout");
     }, timeoutMs);
   });
 }
 
-/** Locate a usable Python — try a few common command names / paths. */
-async function findPythonPath(): Promise<string | null> {
+/** Locate a usable Python — try a few common command names / paths.
+ *  Returns the path plus whether any candidate merely timed out (as
+ *  opposed to every candidate cleanly failing), so the caller can
+ *  propagate that into `probeIncomplete`. */
+async function findPythonPath(): Promise<{ path: string | null; incomplete: boolean }> {
   const candidates = [
     process.env.FASTER_WHISPER_PYTHON,
     "python",
@@ -64,40 +88,56 @@ async function findPythonPath(): Promise<string | null> {
     "py",
   ].filter((c): c is string => Boolean(c && c.trim()));
 
+  let incomplete = false;
   for (const cmd of candidates) {
     // -c "" exits 0 only if the interpreter actually runs. `--version`
     // also works but Windows sometimes routes "py --version" through a
     // launcher that returns 0 even when no Python is installed.
-    if (await probeCommand(`${cmd} -c "import sys"`)) {
-      return cmd;
-    }
+    // `import sys` alone succeeds under Python 2 just as readily as
+    // Python 3 — on a machine where a stray Python 2 shim is what
+    // resolves first on PATH, this used to report pythonPath as "found"
+    // even though faster-whisper (Python-3-only) can never actually run
+    // under it. The exit-code check below fails the probe outright for
+    // anything below 3.x instead of just downstream (via the later
+    // `import faster_whisper` probe) reporting a misleadingly separate
+    // "found Python but no faster-whisper" state.
+    const result = await probeCommand(
+      `${cmd} -c "import sys; sys.exit(0 if sys.version_info[0]>=3 else 1)"`
+    );
+    if (result === "ok") return { path: cmd, incomplete };
+    if (result === "timeout") incomplete = true;
   }
-  return null;
+  return { path: null, incomplete };
 }
 
 export async function detectCapabilities(): Promise<Capabilities> {
   console.log("[capabilities] probing system…");
-  const pythonPath = await findPythonPath();
+  const { path: pythonPath, incomplete: pythonIncomplete } = await findPythonPath();
 
   let fasterWhisperAvailable = false;
+  let fasterWhisperIncomplete = false;
   if (pythonPath) {
-    fasterWhisperAvailable = await probeCommand(
+    const result = await probeCommand(
       `${pythonPath} -c "import faster_whisper"`,
       8000
     );
+    fasterWhisperAvailable = result === "ok";
+    fasterWhisperIncomplete = result === "timeout";
   }
 
   // `nvidia-smi` is only on PATH when NVIDIA drivers are installed
   // properly (regardless of Python). Quick 3s probe.
-  const gpuAvailable = await probeCommand("nvidia-smi -L", 3000);
+  const gpuResult = await probeCommand("nvidia-smi -L", 3000);
+  const gpuAvailable = gpuResult === "ok";
 
   // Lightweight HTTPS reachability check — picks a Google domain
   // because Gemini/HuggingFace will be the most-hit external host
   // for cloud paths. `curl` ships with modern Windows.
-  const internetAvailable = await probeCommand(
+  const netResult = await probeCommand(
     `curl -s -o NUL -w "%{http_code}" -m 4 https://generativelanguage.googleapis.com/v1beta/models | findstr /R "^[12345][0-9][0-9]$"`,
     6000
   );
+  const internetAvailable = netResult === "ok";
 
   const caps: Capabilities = {
     pythonPath,
@@ -106,6 +146,11 @@ export async function detectCapabilities(): Promise<Capabilities> {
     internetAvailable,
     lastChecked: new Date().toISOString(),
     appVersion: app.getVersion(),
+    probeIncomplete:
+      pythonIncomplete ||
+      fasterWhisperIncomplete ||
+      gpuResult === "timeout" ||
+      netResult === "timeout",
   };
 
   console.log("[capabilities]", caps);
@@ -124,7 +169,16 @@ export async function loadOrDetectCapabilities(): Promise<Capabilities> {
     try {
       const cached = JSON.parse(await readFile(filepath, "utf-8")) as Capabilities;
       const age = Date.now() - new Date(cached.lastChecked).getTime();
-      if (age < RECHECK_AGE_MS && cached.appVersion === app.getVersion()) {
+      // A cache written from a probe that timed out (rather than
+      // cleanly resolving every check) is NOT trusted for the full
+      // 7-day window — `cached.probeIncomplete` is undefined on files
+      // written before this field existed, which is falsy and behaves
+      // like "complete", preserving old cache behaviour for upgraders.
+      if (
+        age < RECHECK_AGE_MS &&
+        cached.appVersion === app.getVersion() &&
+        !cached.probeIncomplete
+      ) {
         console.log(
           `[capabilities] using cache (age=${Math.round(age / 60000)}min, ` +
           `python=${cached.pythonPath ?? "no"}, fw=${cached.fasterWhisperAvailable}, ` +
@@ -132,11 +186,41 @@ export async function loadOrDetectCapabilities(): Promise<Capabilities> {
         );
         return cached;
       }
+      if (cached.probeIncomplete) {
+        console.log("[capabilities] cached probe was incomplete (a check timed out) — re-probing");
+      }
     } catch {
       // Corrupted file — fall through to re-detect.
     }
   }
 
+  const fresh = await detectCapabilities();
+  try {
+    await mkdir(userDataDir, { recursive: true });
+    await writeFile(filepath, JSON.stringify(fresh, null, 2));
+  } catch (err) {
+    console.warn("[capabilities] failed to persist cache:", err);
+  }
+  return fresh;
+}
+
+/**
+ * Force a fresh probe and overwrite the cache, bypassing the 7-day
+ * window entirely. Exposed to the renderer via the
+ * `captora:recheckCapabilities` IPC handler (main.ts) for a user who
+ * just installed Python/faster-whisper and doesn't want to wait out
+ * the cache — previously the only way to pick that up sooner than 7
+ * days was an app version bump.
+ *
+ * Does NOT change the already-running embedded Next.js server's
+ * environment — those env vars were fixed at spawn time
+ * (nextServer.ts). The caller is expected to tell the user to restart
+ * Captora to actually pick up the new capabilities; this only makes
+ * sure that restart sees a fresh result instead of the same stale one.
+ */
+export async function recheckCapabilities(): Promise<Capabilities> {
+  const userDataDir = app.getPath("userData");
+  const filepath = join(userDataDir, CAPABILITIES_FILE);
   const fresh = await detectCapabilities();
   try {
     await mkdir(userDataDir, { recursive: true });

@@ -27,6 +27,7 @@ import { startNextServer, stopNextServer } from "./nextServer";
 import { startTempCleanup } from "./tempCleanup";
 import { setupAutoUpdate } from "./autoUpdate";
 import { drainEvents, recordEvent } from "./eventSpool";
+import { recheckCapabilities } from "./capabilities";
 
 // ──────────────────────────────────────────────────────────────
 // Crash capture — registered before anything else can throw.
@@ -217,6 +218,29 @@ ipcMain.handle("captora:drainEvents", async () => {
 });
 
 /**
+ * Force a fresh capability probe (Python / faster-whisper / GPU /
+ * internet), bypassing the normal 7-day cache — for a user who just
+ * installed Python and doesn't want to wait. Only updates the cache
+ * file; the already-running embedded Next.js server keeps whatever env
+ * it was spawned with (nextServer.ts only reads capabilities once, at
+ * startup), so the caller needs to tell the user to restart Captora
+ * for it to actually take effect. See capabilities.ts's
+ * recheckCapabilities doc comment for the full reasoning.
+ */
+ipcMain.handle("captora:recheckCapabilities", async () => {
+  ipcLog("recheckCapabilities requested");
+  try {
+    const caps = await recheckCapabilities();
+    ipcLog(`recheckCapabilities OK: ${JSON.stringify(caps)}`);
+    return caps;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    ipcLog(`recheckCapabilities FAILED ${msg}`);
+    throw err;
+  }
+});
+
+/**
  * Append a single line to captora.log with a timestamp. Used for IPC
  * diagnostics so silent failures are no longer invisible. Sync write
  * because we want the log on disk even if the process crashes
@@ -232,6 +256,28 @@ function ipcLog(message: string): void {
     );
   } catch {
     /* userData may not be writable in weird sandbox configs */
+  }
+}
+
+/**
+ * `projectId` and `ext` from these three IPC handlers below get
+ * concatenated straight into a filesystem path via `join()`, which does
+ * NOT stop `..` segments from escaping the sessions directory. A
+ * renderer that passed e.g. `projectId = "../../../../Users/x/AppData/
+ * Roaming/SomeOtherApp/config"` could write, overwrite, or read back
+ * arbitrary files on the user's machine over IPC. The web-mode
+ * equivalent (web/src/lib/pathSafety.ts) already allow-lists both
+ * values for the same reason — mirrored here for the desktop IPC path.
+ */
+const PROJECT_ID_RE = /^[0-9a-fA-F-]{8,36}$/;
+const SAFE_EXT_RE = /^\.[a-zA-Z0-9]{1,8}$/;
+
+function assertSafeSessionFileParts(projectId: string, ext: string): void {
+  if (!PROJECT_ID_RE.test(projectId)) {
+    throw new Error(`Invalid projectId: ${projectId}`);
+  }
+  if (!SAFE_EXT_RE.test(ext)) {
+    throw new Error(`Invalid file extension: ${ext}`);
   }
 }
 
@@ -259,6 +305,7 @@ function ipcLog(message: string): void {
 ipcMain.handle(
   "captora:saveSourceFile",
   async (_e, payload: { bytes: Uint8Array; ext: string; projectId: string }) => {
+    assertSafeSessionFileParts(payload.projectId, payload.ext);
     const sessionsDir = join(app.getPath("userData"), "sessions");
     const filePath = join(sessionsDir, `${payload.projectId}${payload.ext}`);
     ipcLog(
@@ -293,6 +340,7 @@ ipcMain.handle(
     _e,
     payload: { sourcePath: string; ext: string; projectId: string }
   ) => {
+    assertSafeSessionFileParts(payload.projectId, payload.ext);
     const sessionsDir = join(app.getPath("userData"), "sessions");
     const destPath = join(sessionsDir, `${payload.projectId}${payload.ext}`);
     ipcLog(
@@ -346,6 +394,7 @@ ipcMain.handle(
 ipcMain.handle(
   "captora:readSourceFile",
   async (_e, payload: { projectId: string; ext: string }) => {
+    assertSafeSessionFileParts(payload.projectId, payload.ext);
     const sessionsDir = join(app.getPath("userData"), "sessions");
     const filePath = join(sessionsDir, `${payload.projectId}${payload.ext}`);
     ipcLog(`readSourceFile entered projectId=${payload.projectId} ext=${payload.ext} path=${filePath}`);
@@ -373,7 +422,16 @@ ipcMain.handle(
 // App lifecycle
 // ──────────────────────────────────────────────────────────────
 
-app.whenReady().then(createWindow);
+// `app.quit()` above (when the lock wasn't acquired) schedules a quit —
+// it does NOT synchronously stop the rest of this module from running,
+// so `app.whenReady()` could still resolve and call createWindow() in a
+// second-instance process before the quit takes effect, spawning a
+// second embedded server against the same userData dir the lock exists
+// to prevent. Gating on `gotLock` here closes that race outright: a
+// second-instance process never registers the whenReady callback at all.
+if (gotLock) {
+  app.whenReady().then(createWindow);
+}
 
 app.on("window-all-closed", () => {
   // On macOS apps stay open until Cmd+Q; on Windows/Linux they quit

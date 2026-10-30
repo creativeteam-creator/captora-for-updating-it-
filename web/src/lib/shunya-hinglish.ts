@@ -86,6 +86,26 @@ export async function transcribeWithShunyaHinglish(
 
     let stdout = "";
     let stderr = "";
+    let settled = false;
+
+    // Same fail-fast guard as faster-whisper.ts: without a timeout here,
+    // a hung/deadlocked Python process (CPU fallback on a big file, stuck
+    // model download) blocked the whole /api/transcribe request until
+    // Next's own route ceiling killed it, instead of falling through to
+    // the next provider in the chain.
+    const TIMEOUT_MS = 15 * 60_000;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      proc.kill();
+      reject(new Error(`shunya-hinglish timed out after ${TIMEOUT_MS / 60_000}min`));
+    }, TIMEOUT_MS);
+    const settle = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn();
+    };
 
     proc.stdout.on("data", (d: Buffer) => { stdout += d.toString(); });
     proc.stderr.on("data", (d: Buffer) => {
@@ -96,30 +116,30 @@ export async function transcribeWithShunyaHinglish(
     });
 
     proc.on("error", (err) => {
-      reject(
+      settle(() => reject(
         new Error(
           `shunya-hinglish spawn failed: ${err.message}. ` +
           `Verify Python is on PATH or set SHUNYA_HINGLISH_PYTHON.`
         )
-      );
+      ));
     });
 
     proc.on("close", (code) => {
       if (code === 2) {
-        reject(
+        settle(() => reject(
           new Error(
             "shunya-hinglish: Python dependencies missing. " +
             "Run: pip install torch transformers librosa soundfile"
           )
-        );
+        ));
         return;
       }
       if (code !== 0) {
-        reject(
+        settle(() => reject(
           new Error(
             `shunya-hinglish exit ${code}: ${stderr.slice(-400) || "(no stderr)"}`
           )
-        );
+        ));
         return;
       }
 
@@ -127,11 +147,11 @@ export async function transcribeWithShunyaHinglish(
       try {
         data = JSON.parse(stdout) as RawOutput;
       } catch {
-        reject(
+        settle(() => reject(
           new Error(
             `shunya-hinglish produced non-JSON output: ${stdout.slice(0, 200)}`
           )
-        );
+        ));
         return;
       }
 
@@ -146,13 +166,13 @@ export async function transcribeWithShunyaHinglish(
         `words=${words.length} duration=${data.duration}s`
       );
 
-      resolve({
+      settle(() => resolve({
         task: "transcribe",
         language: "hi-roman",
         duration: data.duration ?? 0,
         text: data.text ?? "",
         words,
-      });
+      }));
     });
   });
 }

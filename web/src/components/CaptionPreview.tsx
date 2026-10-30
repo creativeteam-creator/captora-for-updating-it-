@@ -11,17 +11,39 @@ import type { CaptionStyle, CaptionStyleId } from "@/lib/styles";
 import type { UserFont } from "@/lib/userFonts";
 
 /**
- * One stable blob URL per File. Module-level WeakMap so:
- *   - Same `File` reference → same URL across renders (Strict Mode safe).
- *   - URL is never revoked manually; the browser frees it when the File
- *     gets GC'd (closing the tab, or losing the only reference).
- *
- * The earlier useEffect-based pattern revoked URLs on Strict Mode's
+ * One stable blob URL per File. Module-level WeakMap so the same `File`
+ * reference always gets the same URL across renders (Strict Mode safe)
+ * — the earlier useEffect-based pattern revoked URLs on Strict Mode's
  * simulated unmount, which broke <Html5Audio> playback after the first
- * second — the audio element had loaded the (now-revoked) URL.
+ * second because the audio element had loaded the (now-revoked) URL.
+ *
+ * URLs ARE revoked, though — just not via that useEffect pattern. The
+ * previous version of this comment claimed "the browser frees it when
+ * the File gets GC'd", which isn't how blob URLs work: per spec, an
+ * object URL is registered against the DOCUMENT, not the Blob/File, and
+ * is only released by an explicit `revokeObjectURL()` call or the
+ * document unloading. Garbage-collecting the File does nothing to it.
+ * Since this component only ever has one File "active" at a time (the
+ * currently-open project), `getBlobUrl` revokes the PREVIOUS file's URL
+ * whenever the active file actually changes — e.g. the user opens a
+ * different Recent Videos project in the same tab. That bounds the leak
+ * to at most one extra multi-hundred-MB blob alive at a time instead of
+ * one per project ever opened in the session, while still never
+ * revoking the CURRENT file's URL out from under Strict Mode's
+ * remount — the case the original fix exists for.
  */
 const FILE_BLOB_URLS = new WeakMap<File, string>();
+let activeBlobFile: File | null = null;
 function getBlobUrl(file: File): string {
+  if (activeBlobFile && activeBlobFile !== file) {
+    const prevUrl = FILE_BLOB_URLS.get(activeBlobFile);
+    if (prevUrl) {
+      URL.revokeObjectURL(prevUrl);
+      FILE_BLOB_URLS.delete(activeBlobFile);
+    }
+  }
+  activeBlobFile = file;
+
   let url = FILE_BLOB_URLS.get(file);
   if (!url) {
     url = URL.createObjectURL(file);

@@ -109,6 +109,32 @@ export function setupAutoUpdate(getMainWindow: () => BrowserWindow | null): void
   if (process.platform === "darwin" && !signedBuild) {
     autoUpdater.autoDownload = false;       // download wastes bandwidth if install will fail
     autoUpdater.autoInstallOnAppQuit = false;
+
+    // Strip quarantine on THIS launch's own app bundle, not — as a
+    // previous version of this file tried — inside the
+    // "update-downloaded" handler below. That handler structurally
+    // cannot fire on this path: it only fires after electron-updater
+    // completes an actual download, and with autoDownload=false and no
+    // manual downloadUpdate() call anywhere (this path instead opens
+    // the .dmg in the browser via shell.openExternal, further down),
+    // electron-updater never downloads anything here. Every unsigned
+    // Mac update installed by manually dragging the .dmg into
+    // Applications kept the com.apple.quarantine flag macOS sets on
+    // anything extracted from a downloaded archive, and Gatekeeper
+    // re-prompted "developer cannot be verified" on every single
+    // launch — the exact annoyance this code exists to prevent, just
+    // never actually running.
+    //
+    // Stripping it here instead works because it runs from the NEW
+    // binary the user just launched, on its own bundle — the one
+    // moment we can be certain a fresh install actually happened,
+    // regardless of what the OLD version's process did or didn't do
+    // (which may not even still be running by the time a user finishes
+    // a manual drag-install).
+    const ownAppPath = app.getAppPath().replace(/\/Contents\/.*$/, "");
+    exec(`xattr -dr com.apple.quarantine "${ownAppPath}"`, (err) => {
+      if (err) logLine(`[autoUpdate] quarantine strip skipped (${err.message})`);
+    });
   }
 
   // ── Windows: unsigned builds bypass Authenticode verification ─────────
@@ -239,22 +265,11 @@ export function setupAutoUpdate(getMainWindow: () => BrowserWindow | null): void
   autoUpdater.on("update-downloaded", async (info) => {
     logLine(`[autoUpdate] downloaded v${info.version}`);
 
-    // Mac-specific: strip quarantine on the new app bundle so the
-    // first launch after restart doesn't trigger Gatekeeper. Only
-    // matters for the free ad-hoc-signed path; signed-and-notarized
-    // builds don't need this. Best-effort — failure just means the
-    // user sees the prompt once.
-    if (process.platform === "darwin" && !signedBuild) {
-      const appPath = app.getAppPath().replace(/\/Contents\/.*$/, "");
-      try {
-        await new Promise<void>((resolve) => {
-          exec(`xattr -dr com.apple.quarantine "${appPath}"`, () => resolve());
-        });
-      } catch {
-        /* ignore — non-critical */
-      }
-    }
-
+    // This handler only ever fires for the SIGNED path (native
+    // download-and-restart) — the unsigned-Mac path never reaches
+    // here at all (see the `darwin && !signedBuild` block above,
+    // which is also where its quarantine-strip now lives, since this
+    // spot never ran for it).
     const win = getMainWindow();
     if (!win) {
       // No window to prompt against; install on next quit

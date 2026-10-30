@@ -21,6 +21,7 @@
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { getUserApiKeys, saveUserApiKeys } from "@/lib/userApiKeys";
+import { isElectron, recheckDesktopCapabilities } from "@/lib/electron-bridge";
 
 interface Props {
   open: boolean;
@@ -42,6 +43,13 @@ export function SettingsModal({ open, onClose, userId, userEmail }: Props) {
   // status badge so the user can tell whether their key is being used.
   const [storedGemini, setStoredGemini] = useState<string | null>(null);
   const [storedGroq, setStoredGroq] = useState<string | null>(null);
+  // Desktop-only: force a fresh GPU/Python/faster-whisper/internet probe
+  // instead of waiting out the normal 7-day cache. Previously the only
+  // way to pick up a Python install made after first launch sooner than
+  // a week was bumping the app version.
+  const [recheckStatus, setRecheckStatus] = useState<
+    { kind: "idle" } | { kind: "checking" } | { kind: "done" } | { kind: "error" }
+  >({ kind: "idle" });
 
   useEffect(() => {
     if (!open || !userId) return;
@@ -85,6 +93,12 @@ export function SettingsModal({ open, onClose, userId, userEmail }: Props) {
       const msg = err instanceof Error ? err.message : String(err);
       setSaveStatus({ kind: "error", message: msg });
     }
+  };
+
+  const onRecheckCapabilities = async () => {
+    setRecheckStatus({ kind: "checking" });
+    const result = await recheckDesktopCapabilities();
+    setRecheckStatus(result ? { kind: "done" } : { kind: "error" });
   };
 
   return (
@@ -175,6 +189,35 @@ export function SettingsModal({ open, onClose, userId, userEmail }: Props) {
                 placeholder="gsk_…"
               />
             </>
+          )}
+
+          {isElectron() && (
+            <div className="space-y-1.5 rounded-md border border-[var(--border)] bg-[var(--bg-elevated)] p-3">
+              <div className="text-[11px] font-semibold">Local transcription</div>
+              <p className="text-[10px] leading-relaxed text-[var(--text-muted)]">
+                Captora checks for Python / faster-whisper / GPU once and
+                reuses that result for 7 days. If you just installed
+                Python, use this instead of waiting.
+              </p>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void onRecheckCapabilities()}
+                  disabled={recheckStatus.kind === "checking"}
+                  className="rounded-md border border-[var(--border)] px-3 py-1.5 text-[11px] text-[var(--text-muted)] hover:bg-[var(--bg-hover)] hover:text-[var(--text)] disabled:opacity-50"
+                >
+                  {recheckStatus.kind === "checking" ? "Checking…" : "Recheck now"}
+                </button>
+                {recheckStatus.kind === "done" && (
+                  <span className="text-[10px] text-green-400">
+                    ✓ Updated — restart Captora to use it
+                  </span>
+                )}
+                {recheckStatus.kind === "error" && (
+                  <span className="text-[10px] text-red-400">⚠ Recheck failed</span>
+                )}
+              </div>
+            </div>
           )}
 
           <div className="flex items-center justify-between pt-2">

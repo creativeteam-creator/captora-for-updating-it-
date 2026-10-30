@@ -23,6 +23,7 @@ export type TelemetryEvent =
   | "render.failed"
   | "transcribe.failed"
   | "retranscribe.failed"
+  | "glossary.failed"
   | "upload.failed"
   | "ui.uncaught-error"
   | "ui.unhandled-rejection"
@@ -87,6 +88,31 @@ export const MAX_STACK = 12000;
  *  accident (e.g. spreading a whole request body into context). */
 const SENSITIVE_KEY = /(key|token|secret|password|authorization|cookie)/i;
 
+/**
+ * Redacts patterns that look like secrets from free-text. `SENSITIVE_KEY`
+ * only catches secrets sitting under a suspiciously-named KEY — it does
+ * nothing for `message` and `stack`, which are plain strings with no
+ * keys at all, and nothing for a context VALUE that happens to embed a
+ * secret under an innocuous key (e.g. `context: { url: "...&token=..." }`
+ * — `url` doesn't match SENSITIVE_KEY, so the value passed through
+ * untouched before this). This exists because a fetch failure's error
+ * message routinely IS the failed URL, and this codebase's own STT/LLM
+ * providers put their API key directly in query strings or Authorization
+ * headers — so "log the error" and "log the key" were the same action
+ * for exactly the kind of failure telemetry exists to capture. Matches
+ * generic key=/token=-style query params, Bearer headers, and this app's
+ * own provider key prefixes (ElevenLabs `sk_`, Groq `gsk_`, Gemini
+ * `AIzaSy`) as a second layer beyond the generic patterns.
+ */
+function scrubSecrets(text: string): string {
+  return text
+    .replace(/([?&](?:key|token|api[_-]?key|secret|password)=)[^&\s"']+/gi, "$1[redacted]")
+    .replace(/(Authorization:\s*Bearer\s+)\S+/gi, "$1[redacted]")
+    .replace(/\bsk_[a-zA-Z0-9]{16,}/g, "[redacted]")
+    .replace(/\bgsk_[a-zA-Z0-9]{16,}/g, "[redacted]")
+    .replace(/\bAIza[a-zA-Z0-9_-]{20,}/g, "[redacted]");
+}
+
 export function sanitiseContext(
   context: Record<string, unknown> | undefined
 ): Record<string, unknown> {
@@ -110,7 +136,7 @@ export function sanitiseContext(
     if (v === null || typeof v === "number" || typeof v === "boolean") {
       out[k] = v;
     } else if (typeof v === "string") {
-      out[k] = v.slice(0, 1000);
+      out[k] = scrubSecrets(v.slice(0, 1000));
     } else {
       try {
         out[k] = JSON.parse(JSON.stringify(v));
@@ -161,8 +187,8 @@ export function buildRow(
     level: payload.level ?? "error",
     source,
     event: payload.event,
-    message: String(payload.message ?? "").slice(0, MAX_MESSAGE),
-    stack: payload.stack ? String(payload.stack).slice(0, MAX_STACK) : null,
+    message: scrubSecrets(String(payload.message ?? "").slice(0, MAX_MESSAGE)),
+    stack: payload.stack ? scrubSecrets(String(payload.stack).slice(0, MAX_STACK)) : null,
     context: sanitiseContext(payload.context),
     app_version: env.appVersion ?? null,
     platform: env.platform ?? null,

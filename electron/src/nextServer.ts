@@ -113,7 +113,6 @@ export async function startNextServer(): Promise<ServerInfo> {
   await mkdir(sessionsDir, { recursive: true });
   await mkdir(rendersDir, { recursive: true });
 
-  const port = await findFreePort();
   const standaloneDir = join(
     process.resourcesPath,
     "web",
@@ -149,41 +148,11 @@ export async function startNextServer(): Promise<ServerInfo> {
     );
   }
 
-  console.log(`[nextServer] spawning ${serverScript} on port ${port}`);
-
-  serverProcess = spawn(process.execPath, [serverScript], {
-    cwd: standaloneDir,
-    env: {
-      ...process.env,
-      // Bundled production keys — apply BEFORE the runtime overrides
-      // below so a value in the env file can't accidentally override
-      // CAPTORA_MODE / paths.
-      ...fileEnv,
-      // Capability overrides — applied AFTER fileEnv so a missing
-      // Python installation on the user's machine reliably disables
-      // FASTER_WHISPER_ENABLED even if .env.production says =1.
-      ...capabilityEnv,
-      // CRITICAL: tells Electron to run as Node.js when invoked with a
-      // script arg. Without this, `process.execPath` (which is the
-      // Electron binary inside the packaged app) tries to launch as a
-      // normal Electron app and exits with code 0 — leaving the user
-      // staring at "Next.js exited early with code 0".
-      ELECTRON_RUN_AS_NODE: "1",
-      NODE_ENV: "production",
-      PORT: String(port),
-      HOSTNAME: "127.0.0.1",
-      // Desktop-mode flags consumed by web/src/lib/captora-mode.ts
-      CAPTORA_MODE: "desktop",
-      CAPTORA_SESSIONS_DIR: sessionsDir,
-      CAPTORA_RENDERS_DIR: rendersDir,
-    },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-
   // Mirror stdout/stderr to a log file in userData so users can hand
   // us logs when something breaks. Sync writes for the startup banner
   // (guaranteed flushed even if the process crashes seconds later);
-  // async WriteStream for the high-volume per-line piping.
+  // async WriteStream for the high-volume per-line piping. Created once
+  // — shared across retry attempts below, if any.
   // Location: %APPDATA%/Captora/captora.log
   const logPath = join(app.getPath("userData"), "captora.log");
   logSync(`\n--- Captora v${app.getVersion()} launched ${new Date().toISOString()} ---\n`);
@@ -192,41 +161,99 @@ export async function startNextServer(): Promise<ServerInfo> {
   logSync(`[nextServer] serverScript=${serverScript}\n`);
   logSync(`[nextServer] sessionsDir=${sessionsDir}\n`);
   logSync(`[nextServer] rendersDir=${rendersDir}\n`);
-  logSync(`[nextServer] port=${port}\n`);
 
   const logStream = createWriteStream(logPath, { flags: "a" });
 
-  serverProcess.stdout?.on("data", (chunk: Buffer) => {
-    process.stdout.write(`[next] ${chunk}`);
-    logStream.write(`[next] ${chunk}`);
-  });
-  serverProcess.stderr?.on("data", (chunk: Buffer) => {
-    process.stderr.write(`[next-err] ${chunk}`);
-    logStream.write(`[next-err] ${chunk}`);
-  });
+  // `findFreePort()` only proves a port was free at SCAN time — nothing
+  // re-checks it's still free at the moment we actually bind, and
+  // nothing sat between them used to retry. A relaunch shortly after a
+  // crash (the previous child's socket lingering in Windows TIME_WAIT),
+  // or two instances starting close together, could both see the same
+  // port as free and race to bind it; the loser's server.js fails to
+  // listen and exits, which surfaced only as the generic "Next.js
+  // exited early with code X" — indistinguishable from any other
+  // startup failure, with no retry. Re-scanning for a fresh port and
+  // trying again a few times turns that transient collision into a
+  // slightly slower boot instead of a hard failure.
+  const MAX_SPAWN_ATTEMPTS = 3;
+  let port = 0;
+  for (let attempt = 1; ; attempt++) {
+    port = await findFreePort();
+    console.log(`[nextServer] spawning ${serverScript} on port ${port} (attempt ${attempt}/${MAX_SPAWN_ATTEMPTS})`);
+    logSync(`[nextServer] port=${port} attempt=${attempt}\n`);
 
-  // Wait for the "Ready" line on stdout — Next.js prints it once it's
-  // listening. 30s timeout; first launch can be slow on cold disk.
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      reject(new Error("Next.js failed to start within 30s"));
-    }, 30_000);
+    serverProcess = spawn(process.execPath, [serverScript], {
+      cwd: standaloneDir,
+      env: {
+        ...process.env,
+        // Bundled production keys — apply BEFORE the runtime overrides
+        // below so a value in the env file can't accidentally override
+        // CAPTORA_MODE / paths.
+        ...fileEnv,
+        // Capability overrides — applied AFTER fileEnv so a missing
+        // Python installation on the user's machine reliably disables
+        // FASTER_WHISPER_ENABLED even if .env.production says =1.
+        ...capabilityEnv,
+        // CRITICAL: tells Electron to run as Node.js when invoked with a
+        // script arg. Without this, `process.execPath` (which is the
+        // Electron binary inside the packaged app) tries to launch as a
+        // normal Electron app and exits with code 0 — leaving the user
+        // staring at "Next.js exited early with code 0".
+        ELECTRON_RUN_AS_NODE: "1",
+        NODE_ENV: "production",
+        PORT: String(port),
+        HOSTNAME: "127.0.0.1",
+        // Desktop-mode flags consumed by web/src/lib/captora-mode.ts
+        CAPTORA_MODE: "desktop",
+        CAPTORA_SESSIONS_DIR: sessionsDir,
+        CAPTORA_RENDERS_DIR: rendersDir,
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
 
-    serverProcess?.stdout?.on("data", (chunk: Buffer) => {
-      if (chunk.toString().toLowerCase().includes("ready")) {
-        clearTimeout(timer);
-        resolve();
-      }
+    serverProcess.stdout?.on("data", (chunk: Buffer) => {
+      process.stdout.write(`[next] ${chunk}`);
+      logStream.write(`[next] ${chunk}`);
     });
-    serverProcess?.on("error", (err) => {
-      clearTimeout(timer);
-      reject(err);
+    serverProcess.stderr?.on("data", (chunk: Buffer) => {
+      process.stderr.write(`[next-err] ${chunk}`);
+      logStream.write(`[next-err] ${chunk}`);
     });
-    serverProcess?.on("exit", (code) => {
-      clearTimeout(timer);
-      reject(new Error(`Next.js exited early with code ${code}`));
-    });
-  });
+
+    // Wait for the "Ready" line on stdout — Next.js prints it once it's
+    // listening. 30s timeout; first launch can be slow on cold disk.
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          reject(new Error("Next.js failed to start within 30s"));
+        }, 30_000);
+
+        serverProcess?.stdout?.on("data", (chunk: Buffer) => {
+          if (chunk.toString().toLowerCase().includes("ready")) {
+            clearTimeout(timer);
+            resolve();
+          }
+        });
+        serverProcess?.on("error", (err) => {
+          clearTimeout(timer);
+          reject(err);
+        });
+        serverProcess?.on("exit", (code) => {
+          clearTimeout(timer);
+          reject(new Error(`Next.js exited early with code ${code}`));
+        });
+      });
+      break; // ready — fall through to the post-startup wiring below
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      // Only retry the specific "exited immediately" shape a bind
+      // failure produces. The 30s-timeout and spawn-error cases are
+      // real problems a fresh port won't fix — surface those as before.
+      const looksLikeBindFailure = /exited early with code/.test(message);
+      if (!looksLikeBindFailure || attempt >= MAX_SPAWN_ATTEMPTS) throw err;
+      logSync(`[nextServer] attempt ${attempt} failed (${message}) — retrying with a fresh port\n`);
+    }
+  }
 
   // Past this point the server is up. If it dies LATER — OOM during a
   // 4K render, a crash inside Remotion, the OS killing it — the window

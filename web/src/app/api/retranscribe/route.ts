@@ -5,7 +5,11 @@ import { join } from "path";
 import { tmpdir } from "os";
 import { transcribe } from "@/lib/transcribe";
 import type { AccuracyTier } from "@/lib/whisper";
-import type { WritingScript } from "@/lib/languages";
+import {
+  WRITING_SCRIPTS,
+  getSpokenLanguage,
+  type WritingScript,
+} from "@/lib/languages";
 import { createClient } from "@/lib/supabase/server";
 import { SOURCE_BUCKET } from "@/lib/supabase/storage";
 import { downloadToFile } from "@/lib/supabase/storage-server";
@@ -219,11 +223,25 @@ export async function POST(req: NextRequest) {
       // ───── UPDATE the existing project row ─────
       // Only the transcription-derived fields change; keep title,
       // style_id, style_overrides, render_url, etc. as they were.
+      //
+      // Label columns updated alongside the raw codes — /api/transcribe
+      // always computes both together, but this route previously only
+      // wrote spoken_language/writing_script and left
+      // spoken_language_label/writing_script_label stale. That was
+      // invisible while overrides were only reachable by calling the API
+      // directly; now that EditorView's Re-transcribe panel lets a user
+      // actually change the language here, shipping it without this
+      // would mean the header kept showing the OLD language's label
+      // right after successfully re-transcribing in a new one.
+      const spokenLanguageLabel = getSpokenLanguage(spokenLanguage)?.label ?? spokenLanguage;
+      const writingScriptLabel = WRITING_SCRIPTS[writingScript].label;
       const { data: updated, error: updateErr } = await sb
         .from("projects")
         .update({
           spoken_language: spokenLanguage,
+          spoken_language_label: spokenLanguageLabel,
           writing_script: writingScript,
+          writing_script_label: writingScriptLabel,
           translate_to_english: translateToEnglish,
           transcribe_provider: result.provider,
           transcript_words: result.words,
