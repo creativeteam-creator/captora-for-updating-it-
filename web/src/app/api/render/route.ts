@@ -535,10 +535,9 @@ export async function POST(req: NextRequest) {
     outPath = join(tmpdir(), `captora-render-${randomUUID()}.${outExt}`);
 
     // ───── Pre-flight disk-space check ─────
-    // ProRes 4444 (Transparent mode) writes ~6 MB per PNG frame to the
-    // system temp dir. A 106-second render fills ~19 GB just for the
-    // temp PNGs before FFmpeg mux, plus ~350 MB for the final MOV. If
-    // the user's boot volume is close to full, FFmpeg crashes mid-mux
+    // ProRes 4444 (Transparent mode) output is large — on the order of
+    // a few GB per minute at 1080p. If the user's boot volume is close
+    // to full, FFmpeg crashes mid-mux
     // with "No space left on device", which in turn kills the Next.js
     // child before it can send the JSON error — the browser sees the
     // generic "Failed to fetch" and the user has no idea what happened.
@@ -554,21 +553,30 @@ export async function POST(req: NextRequest) {
       if (typeof anyFsp.statfs === "function") {
         const stats = await anyFsp.statfs(tmpdir());
         const availableBytes = Number(stats.bavail) * Number(stats.bsize);
-        // Rough per-second footprint AT 30 FPS:
-        //   Transparent (ProRes 4444, PNG frames): ~200 MB/s
-        //   Regular  (H.264, JPEG frames):        ~15 MB/s
+        // Rough per-second footprint AT 30 FPS, 1080p:
+        //   Transparent (ProRes 4444): ~45 MB/s
+        //   Regular  (H.264):          ~15 MB/s
         // Plus a 2 GB safety cushion for Chromium boot + logs.
         //
-        // Scaled by the actual frame rate. Temp usage is per-FRAME, not
-        // per-second, so now that renders honour the source's fps a
-        // 60fps export writes twice the frames — and these figures,
-        // written when every render was 30fps, would have under-
-        // estimated it by half. Under-estimating is the one direction
-        // that matters: it lets the render start and then die on "No
-        // space left on device" twenty minutes in, which is the exact
-        // failure this check exists to prevent.
-        const perSecMBAt30 = transparent ? 200 : 15;
-        const perSecMB = perSecMBAt30 * (fps / 30);
+        // Remotion pipes captured frames straight into FFmpeg's stdin —
+        // it never parks a folder of PNGs on disk — so the temp cost is
+        // essentially the output file itself. ProRes 4444 tops out around
+        // 330 Mbit/s (~41 MB/s) at 1080p30 even for full-motion footage,
+        // and caption-only alpha frames compress far below that. The old
+        // 200 MB/s figure assumed on-disk PNG frames and blocked exports
+        // of a few minutes on machines with ~50 GB free.
+        //
+        // Scaled by frame rate and pixel count (ProRes bitrate is
+        // per-frame and roughly proportional to resolution), so a 60fps
+        // or 4K export still gets a proportionally larger estimate —
+        // under-estimating is the direction that lets a render die on
+        // "No space left on device" twenty minutes in.
+        const perSecMBAt30 = transparent ? 45 : 15;
+        const pixelScale = Math.max(
+          1,
+          (composition.width * composition.height) / (1920 * 1080)
+        );
+        const perSecMB = perSecMBAt30 * (fps / 30) * pixelScale;
         const durationSecEstimate = Number(durationSec) || 60;
         const neededBytes =
           durationSecEstimate * perSecMB * 1024 * 1024 + 2 * 1024 * 1024 * 1024;
@@ -579,7 +587,7 @@ export async function POST(req: NextRequest) {
             `Not enough disk space to render. ` +
               `${availableGB} GB free but this render needs ~${neededGB} GB temp space` +
               (transparent
-                ? ` (Transparent mode uses ProRes 4444 — 20x more temp space than regular MP4). ` +
+                ? ` (Transparent mode uses ProRes 4444, which is ~3x larger than regular MP4). ` +
                   `Free up space, OR uncheck Transparent and export as MP4 instead.`
                 : `. Free up disk space and try again.`)
           );
