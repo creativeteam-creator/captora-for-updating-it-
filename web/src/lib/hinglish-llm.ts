@@ -1016,9 +1016,23 @@ clean English spelling, never the phonetic Roman):
     // TPD (tokens-per-day) / RPD (requests-per-day) reset is hours
     // away — retrying with a 60s back-off just wastes time. Bail out
     // immediately so the chain falls through to the next provider.
-    const isDailyQuota =
-      /tokens?\s+per\s+day|\bTPD\b|requests?\s+per\s+day|\bRPD\b|\bquota exceeded\b|\bbillin\w+ details\b|\binsufficient_quota\b/i
-        .test(resp.rawBody);
+    //
+    // Gemini's 429 body says "You exceeded your current quota, please
+    // check your plan and billing details" for EVERY quota — including
+    // the free tier's per-minute caps — so those generic phrases alone
+    // can't mean "daily". Its `quotaId` (e.g.
+    // "GenerateRequestsPerMinutePerProjectPerModel-FreeTier") names the
+    // actual window: an explicit per-day marker wins, an explicit
+    // per-minute marker with no per-day one is a transient throttle and
+    // falls through to the 429 retry below, and only a body with neither
+    // keeps the old "generic quota phrase ⇒ daily" reading.
+    const body = resp.rawBody;
+    const explicitDaily =
+      /PerDay|tokens?\s+per\s+day|\bTPD\b|requests?\s+per\s+day|\bRPD\b|\binsufficient_quota\b/i.test(body);
+    const explicitPerMinute =
+      /PerMinute|per\s+minute|\bRPM\b|\bTPM\b/i.test(body);
+    const genericQuota = /\bquota exceeded\b|exceeded your current quota|\bbillin\w+ details\b/i.test(body);
+    const isDailyQuota = explicitDaily || (genericQuota && !explicitPerMinute);
 
     if (isDailyQuota) {
       console.log(

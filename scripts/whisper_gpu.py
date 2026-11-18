@@ -220,7 +220,14 @@ def main() -> int:
             task=args.task,
             word_timestamps=True,
             beam_size=10,
-            temperature=0.0,
+            # Temperature FALLBACK ladder, not a single 0.0. Whisper only
+            # re-decodes a chunk that fails compression_ratio_threshold /
+            # log_prob_threshold when there's a higher temperature left to
+            # try — with a bare 0.0 those thresholds detected repetition
+            # loops ("accha accha accha…") and then kept them anyway.
+            # Chunks that decode cleanly still use 0.0, so normal speech
+            # is unaffected.
+            temperature=[0.0, 0.2, 0.4, 0.6],
             # condition_on_previous_text=False — prevents Whisper from
             # carrying decoder state across chunks, which on long videos
             # tends to drift mid-way (the model latches onto a stale
@@ -235,7 +242,11 @@ def main() -> int:
             # hallucinations in genuine silence are rare on real speech
             # audio.
             no_speech_threshold=0.2,    # was 0.3 — even more chunks decoded
-            compression_ratio_threshold=3.0,   # was 2.4 — keep "noisy" chunks
+            # Back to Whisper's default 2.4: 3.0 let real repetition loops
+            # through. A chunk that trips it is now re-decoded at a higher
+            # temperature (ladder above), not dropped, so this no longer
+            # costs words the way it did when temperature was a bare 0.0.
+            compression_ratio_threshold=2.4,
             log_prob_threshold=-2.0,    # was -1.0 — accept lower-confidence words
             repetition_penalty=1.0,
             # VAD off entirely — even lenient VAD parameters were dropping
