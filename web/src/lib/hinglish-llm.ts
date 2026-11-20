@@ -608,127 +608,37 @@ export async function transliterateWordsToHinglish(
   // recover from a single overloaded provider (Gemini's 503 spikes,
   // Anthropic credit exhaustion mid-job, etc.) without dropping all the
   // way to the optitrans regex fallback.
+  //
+  // Progress is kept ACROSS providers: `done` counts how many leading
+  // words already came back from an LLM. A provider that fails part-way
+  // (e.g. Gemini's daily quota tripping on the last of four batches)
+  // used to discard every batch it had already finished, and if the
+  // fallback provider failed too, the WHOLE transcript dropped to the
+  // optitrans regex ("apa", "eka", "kitana"). Now the next provider
+  // resumes at `done`, and if every provider fails, only the
+  // never-transliterated tail gets the regex fallback below.
   let lastErr: unknown = null;
-  for (let providerIdx = 0; providerIdx < chain.length; providerIdx++) {
+  const llmResult: WhisperWord[] = words.slice();
+  let done = 0;
+  let workingProvider: ProviderInfo | null = null;
+  for (let providerIdx = 0; providerIdx < chain.length && done < words.length; providerIdx++) {
     const provider = chain[providerIdx];
     const batchSize = pickBatchSize(provider);
     console.log(
       `[hinglish-llm] using provider=${provider.name} model=${provider.model} batch=${batchSize}` +
-      (providerIdx > 0 ? ` (fallback #${providerIdx} after previous provider failed)` : "")
+      (providerIdx > 0 ? ` (fallback #${providerIdx} after previous provider failed, resuming at word ${done})` : "")
     );
-
     try {
-      const glossaryPromise = readLocalGlossary();
-      const chunks = chunkArray(words, batchSize);
-      const llmResult: WhisperWord[] = [];
+      const chunks = chunkArray(words.slice(done), batchSize);
       for (let i = 0; i < chunks.length; i++) {
         const batch = await transliterateBatch(chunks[i], provider);
-        llmResult.push(...batch);
+        llmResult.splice(done, batch.length, ...batch);
+        done += batch.length;
+        workingProvider = provider;
         if (i < chunks.length - 1) {
           await new Promise((r) => setTimeout(r, 200));
         }
       }
-
-      // ── Cleanup pass for skipped words ────────────────────────────
-      // transliterateBatch leaves Devanagari in slots the LLM skipped.
-      // Send those alone in a fresh batch — the model usually transliterates
-      // correctly when there's no other context to drift toward. Repeat
-      // up to 2 cleanup rounds so half-fixes also get retried.
-      const stillDeva = (w: WhisperWord) => /[ऀ-ॿ]/.test(w.word);
-      for (let pass = 0; pass < 2; pass++) {
-        const skippedIndices: number[] = [];
-        for (let i = 0; i < llmResult.length; i++) {
-          if (stillDeva(llmResult[i])) skippedIndices.push(i);
-        }
-        if (skippedIndices.length === 0) break;
-        console.log(
-          `[hinglish-llm] cleanup pass ${pass + 1}: ${skippedIndices.length} words still Devanagari, retrying via ${provider.name}...`
-        );
-        const skippedWords = skippedIndices.map((idx) => llmResult[idx]);
-        try {
-          // Chunk through the same batchSize as the main pass — sending
-          // all skipped words in one oversized request (e.g. 200+ words
-          // to Groq, which is tuned for 100) reproduces the exact
-          // drop/merge failure mode this cleanup pass exists to fix.
-          const cleanupChunks = chunkArray(skippedWords, batchSize);
-          const cleanup: WhisperWord[] = [];
-          for (let c = 0; c < cleanupChunks.length; c++) {
-            cleanup.push(...(await transliterateBatch(cleanupChunks[c], provider)));
-            if (c < cleanupChunks.length - 1) {
-              await new Promise((r) => setTimeout(r, 200));
-            }
-          }
-          cleanup.forEach((w, j) => {
-            llmResult[skippedIndices[j]] = w;
-          });
-        } catch (err) {
-          console.warn(
-            `[hinglish-llm] cleanup pass ${pass + 1} failed: ` +
-            (err instanceof Error ? err.message : err)
-          );
-          break;
-        }
-      }
-
-      // Final fallback: optitrans regex for any word the LLM never
-      // managed to transliterate (after main pass + cleanup retries).
-      // Better academic-style spelling than blank captions.
-      let finalOptitransCount = 0;
-      for (let i = 0; i < llmResult.length; i++) {
-        if (stillDeva(llmResult[i])) {
-          llmResult[i] = {
-            ...llmResult[i],
-            word: indicToRoman(llmResult[i].word, "devanagari"),
-          };
-          finalOptitransCount++;
-        }
-      }
-      if (finalOptitransCount > 0) {
-        console.log(
-          `[hinglish-llm] applied optitrans regex fallback to ${finalOptitransCount} words ` +
-          `the LLM couldn't transliterate after ${2 + 1} passes`
-        );
-        // Unlike the daily-quota path, this used to only be console-logged —
-        // a batch that came back mostly garbled (format drift, safety
-        // filter, truncation) still returned as a normal "success" with
-        // no signal to the user that caption quality had degraded.
-        pushWarning({
-          kind: "quality-degraded",
-          provider: provider.name === "anthropic" || provider.name === "openai" ? "all" : provider.name,
-          userOwned: false,
-          message: `${finalOptitransCount} word${finalOptitransCount === 1 ? "" : "s"} LLM se poori tarah transliterate nahi ho paya — academic-style Roman spelling use hui hai. Captions list me manually check kar lo.`,
-        });
-      }
-
-      // Phonetic-English safety net — catches common rough-Roman
-      // misspellings of English words that BOTH Gemini Flash and Groq
-      // sometimes leave alone because the input "looks Hinglish-y".
-      // Only includes mappings where the source has no plausible Hindi
-      // meaning, so no false positives on real Hindi words.
-      let safetyNetCount = 0;
-      for (let i = 0; i < llmResult.length; i++) {
-        const fixed = applyPhoneticEnglishFix(llmResult[i].word);
-        if (fixed !== llmResult[i].word) {
-          llmResult[i] = { ...llmResult[i], word: fixed };
-          safetyNetCount++;
-        }
-      }
-      if (safetyNetCount > 0) {
-        console.log(
-          `[hinglish-llm] phonetic-english safety net fixed ${safetyNetCount} word(s) the LLM left as rough Roman`
-        );
-      }
-
-      const glossary = await glossaryPromise;
-      const corrected = llmResult.map((w) => ({
-        ...w,
-        word: applyGlossary(w.word, glossary as Record<string, string>),
-      }));
-      const glossarySize = Object.keys(glossary as Record<string, string>).length;
-      if (glossarySize > 0) {
-        console.log(`[hinglish-llm] applied ${glossarySize} glossary corrections`);
-      }
-      return corrected;
     } catch (err) {
       lastErr = err;
       console.warn(
@@ -736,15 +646,127 @@ export async function transliterateWordsToHinglish(
         `${err instanceof Error ? err.message : err}` +
         (providerIdx < chain.length - 1 ? "; falling through to next provider" : "; no more providers")
       );
-      // Loop continues with next provider in the chain.
     }
   }
 
-  // Every provider in the chain failed. Surface the last error so the
+  // Nothing came back from any provider — surface the last error so the
   // router can fall back to the optitrans regex path as a last resort.
-  throw lastErr instanceof Error
-    ? lastErr
-    : new Error("hinglish-llm: all providers failed");
+  if (done === 0 || !workingProvider) {
+    throw lastErr instanceof Error
+      ? lastErr
+      : new Error("hinglish-llm: all providers failed");
+  }
+  if (done < words.length) {
+    console.warn(
+      `[hinglish-llm] every provider failed after ${done}/${words.length} words — ` +
+      `keeping the LLM output and regex-transliterating only the remaining ${words.length - done}`
+    );
+  }
+
+  const provider = workingProvider;
+  const batchSize = pickBatchSize(provider);
+  const glossaryPromise = readLocalGlossary();
+
+  // ── Cleanup pass for skipped words ────────────────────────────
+  // transliterateBatch leaves Devanagari in slots the LLM skipped.
+  // Send those alone in a fresh batch — the model usually transliterates
+  // correctly when there's no other context to drift toward. Repeat
+  // up to 2 cleanup rounds so half-fixes also get retried.
+  const stillDeva = (w: WhisperWord) => /[ऀ-ॿ]/.test(w.word);
+  for (let pass = 0; pass < 2; pass++) {
+    const skippedIndices: number[] = [];
+    for (let i = 0; i < llmResult.length; i++) {
+      if (stillDeva(llmResult[i])) skippedIndices.push(i);
+    }
+    if (skippedIndices.length === 0) break;
+    console.log(
+      `[hinglish-llm] cleanup pass ${pass + 1}: ${skippedIndices.length} words still Devanagari, retrying via ${provider.name}...`
+    );
+    const skippedWords = skippedIndices.map((idx) => llmResult[idx]);
+    try {
+      // Chunk through the same batchSize as the main pass — sending
+      // all skipped words in one oversized request (e.g. 200+ words
+      // to Groq, which is tuned for 100) reproduces the exact
+      // drop/merge failure mode this cleanup pass exists to fix.
+      const cleanupChunks = chunkArray(skippedWords, batchSize);
+      const cleanup: WhisperWord[] = [];
+      for (let c = 0; c < cleanupChunks.length; c++) {
+        cleanup.push(...(await transliterateBatch(cleanupChunks[c], provider)));
+        if (c < cleanupChunks.length - 1) {
+          await new Promise((r) => setTimeout(r, 200));
+        }
+      }
+      cleanup.forEach((w, j) => {
+        llmResult[skippedIndices[j]] = w;
+      });
+    } catch (err) {
+      console.warn(
+        `[hinglish-llm] cleanup pass ${pass + 1} failed: ` +
+        (err instanceof Error ? err.message : err)
+      );
+      break;
+    }
+  }
+
+  // Final fallback: optitrans regex for any word the LLM never
+  // managed to transliterate (after main pass + cleanup retries).
+  // Better academic-style spelling than blank captions.
+  let finalOptitransCount = 0;
+  for (let i = 0; i < llmResult.length; i++) {
+    if (stillDeva(llmResult[i])) {
+      llmResult[i] = {
+        ...llmResult[i],
+        word: indicToRoman(llmResult[i].word, "devanagari"),
+      };
+      finalOptitransCount++;
+    }
+  }
+  if (finalOptitransCount > 0) {
+    console.log(
+      `[hinglish-llm] applied optitrans regex fallback to ${finalOptitransCount} words ` +
+      `the LLM couldn't transliterate after ${2 + 1} passes`
+    );
+    // Unlike the daily-quota path, this used to only be console-logged —
+    // a batch that came back mostly garbled (format drift, safety
+    // filter, truncation) still returned as a normal "success" with
+    // no signal to the user that caption quality had degraded.
+    pushWarning({
+      kind: "quality-degraded",
+      provider: provider.name === "anthropic" || provider.name === "openai" ? "all" : provider.name,
+      userOwned: false,
+      message: `${finalOptitransCount} word${finalOptitransCount === 1 ? "" : "s"} LLM se poori tarah transliterate nahi ho paya — academic-style Roman spelling use hui hai. Captions list me manually check kar lo.`,
+    });
+  }
+
+  // Phonetic-English safety net — catches common rough-Roman
+  // misspellings of English words that BOTH Gemini Flash and Groq
+  // sometimes leave alone because the input "looks Hinglish-y".
+  // Only includes mappings where the source has no plausible Hindi
+  // meaning, so no false positives on real Hindi words.
+  let safetyNetCount = 0;
+  for (let i = 0; i < llmResult.length; i++) {
+    const fixed = applyPhoneticEnglishFix(llmResult[i].word);
+    if (fixed !== llmResult[i].word) {
+      llmResult[i] = { ...llmResult[i], word: fixed };
+      safetyNetCount++;
+    }
+  }
+  if (safetyNetCount > 0) {
+    console.log(
+      `[hinglish-llm] phonetic-english safety net fixed ${safetyNetCount} word(s) the LLM left as rough Roman`
+    );
+  }
+
+  const glossary = await glossaryPromise;
+  const corrected = llmResult.map((w) => ({
+    ...w,
+    word: applyGlossary(w.word, glossary as Record<string, string>),
+  }));
+  const glossarySize = Object.keys(glossary as Record<string, string>).length;
+  if (glossarySize > 0) {
+    console.log(`[hinglish-llm] applied ${glossarySize} glossary corrections`);
+  }
+  return corrected;
 }
 
 function chunkArray<T>(arr: T[], size: number): T[][] {

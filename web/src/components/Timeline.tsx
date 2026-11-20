@@ -470,35 +470,48 @@ export function Timeline({
     };
   }, [file, stripWidthPx]);
 
+  // Played-portion overlay: a second canvas holding the same bars in the
+  // accent colour, clipped by a wrapper whose width follows the playhead.
+  //
+  // Both canvases are drawn ONCE per peaks / zoom / track-height change.
+  // The old version redrew a single canvas on every `currentSec` change —
+  // 30×/s during playback — and on a 12-minute video that canvas is
+  // ~44,000 px wide with one bar per pixel. Resizing + repainting it each
+  // frame starved the main thread, the Player's clock fell behind the
+  // <video> element, and Remotion kept seeking the video back to resync —
+  // replaying the last ~1 s of audio over and over, which users heard as
+  // "Captora is repeating words". Only the wrapper's width changes per
+  // frame now, which is a cheap style update.
+  const playedCanvasRef = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || !peaks) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const dpr = window.devicePixelRatio || 1;
-    const w = canvas.clientWidth;
-    const h = canvas.clientHeight;
-    canvas.width = Math.round(w * dpr);
-    canvas.height = Math.round(h * dpr);
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, w, h);
-
-    const playedPx = Math.round(currentSec * pxPerSec);
-    const mid = h / 2;
-    const barWidth = w / peaks.length;
-    for (let i = 0; i < peaks.length; i++) {
-      const x = i * barWidth;
-      const amp = peaks[i] * (h / 2) * 0.9;
-      // Played portion uses accent colour; un-played uses muted grey.
-      // The split is sample-precise so the playhead "wipes" the
-      // waveform exactly under it.
-      ctx.fillStyle =
-        x < playedPx
-          ? "rgba(99, 102, 241, 0.85)"
-          : "rgba(148, 163, 184, 0.45)";
-      ctx.fillRect(x, mid - amp, Math.max(0.5, barWidth - 0.4), amp * 2);
-    }
-  }, [peaks, currentSec, pxPerSec]);
+    if (!peaks) return;
+    const base = canvasRef.current;
+    if (!base) return;
+    // The played canvas sits inside a clipping wrapper, so both are sized
+    // from the base canvas's full width rather than their own.
+    const w = base.clientWidth;
+    const h = base.clientHeight;
+    const draw = (canvas: HTMLCanvasElement | null, color: string) => {
+      if (!canvas) return;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      const dpr = window.devicePixelRatio || 1;
+      canvas.style.width = `${w}px`;
+      canvas.width = Math.round(w * dpr);
+      canvas.height = Math.round(h * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, w, h);
+      ctx.fillStyle = color;
+      const mid = h / 2;
+      const barWidth = w / peaks.length;
+      for (let i = 0; i < peaks.length; i++) {
+        const amp = peaks[i] * (h / 2) * 0.9;
+        ctx.fillRect(i * barWidth, mid - amp, Math.max(0.5, barWidth - 0.4), amp * 2);
+      }
+    };
+    draw(base, "rgba(148, 163, 184, 0.45)");
+    draw(playedCanvasRef.current, "rgba(99, 102, 241, 0.85)");
+  }, [peaks, pxPerSec, stripWidthPx, trackHeights.audio]);
   const zoomIn = () =>
     setPxPerSec((px) => Math.min(PX_PER_SEC_MAX, Math.round(px * Math.SQRT2)));
   const zoomOut = () =>
@@ -1289,6 +1302,17 @@ export function Timeline({
                   className="pointer-events-none absolute inset-0 h-full w-full"
                   style={{ opacity: peaks ? 1 : 0 }}
                 />
+              )}
+              {file && (
+                <div
+                  className="pointer-events-none absolute inset-y-0 left-0 overflow-hidden"
+                  style={{
+                    width: `${Math.max(0, Math.round(currentSec * pxPerSec))}px`,
+                    opacity: peaks ? 1 : 0,
+                  }}
+                >
+                  <canvas ref={playedCanvasRef} className="absolute inset-y-0 left-0 h-full" />
+                </div>
               )}
               {!peaks && file && (
                 <div className="flex h-full items-center justify-center text-[10px] uppercase tracking-wide text-[var(--text-muted)]">
