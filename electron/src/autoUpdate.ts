@@ -49,6 +49,7 @@ import { appendFileSync } from "fs";
 import { join } from "path";
 import { isSignedBuild } from "./buildInfo";
 import { recordEvent } from "./eventSpool";
+import { stopNextServer } from "./nextServer";
 
 const GITHUB_RELEASE_BASE =
   "https://github.com/creativeteam-creator/captora-for-updating-it-/releases/download";
@@ -287,7 +288,15 @@ export function setupAutoUpdate(getMainWindow: () => BrowserWindow | null): void
     });
 
     if (result.response === 0) {
-      autoUpdater.quitAndInstall();
+      // Take the embedded server tree down BEFORE handing off to the
+      // installer — before-quit also does this, but quitAndInstall can
+      // spawn the installer before that handler has finished.
+      stopNextServer();
+      // isSilent=true: the NSIS installer is assisted (oneClick: false),
+      // so a non-silent run reopened the full setup wizard, which users
+      // read as "update didn't install". Silent reuses the existing
+      // install dir. isForceRunAfter=true relaunches Captora afterwards.
+      autoUpdater.quitAndInstall(true, true);
     }
   });
 

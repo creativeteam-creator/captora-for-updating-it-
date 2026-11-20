@@ -20,7 +20,7 @@
  * env vars and switches paths accordingly.
  */
 
-import { spawn, ChildProcess } from "child_process";
+import { spawn, execSync, ChildProcess } from "child_process";
 import { mkdir, readFile } from "fs/promises";
 import { existsSync, appendFileSync, createWriteStream } from "fs";
 import { join } from "path";
@@ -281,7 +281,25 @@ export async function startNextServer(): Promise<ServerInfo> {
 export function stopNextServer(): void {
   stoppingIntentionally = true;
   if (serverProcess && !serverProcess.killed) {
-    serverProcess.kill();
+    // On Windows, ChildProcess.kill() terminates only the direct child,
+    // and returns before it has actually exited. The server runs from
+    // Captora.exe itself (ELECTRON_RUN_AS_NODE) and may own Remotion's
+    // Chromium / FFmpeg or a Python STT process. Any of those still
+    // alive when the NSIS updater starts keeps Captora.exe locked, and
+    // the installer sits on "Captora cannot be closed… Retry" forever —
+    // so auto-updates never applied. taskkill /T /F takes the whole
+    // tree down and execSync waits for it before quit continues.
+    const pid = serverProcess.pid;
+    if (process.platform === "win32" && pid) {
+      try {
+        execSync(`taskkill /pid ${pid} /T /F`, { windowsHide: true, stdio: "ignore" });
+      } catch {
+        // Already exited, or taskkill unavailable — fall back below.
+        try { serverProcess.kill(); } catch { /* ignore */ }
+      }
+    } else {
+      serverProcess.kill();
+    }
     serverProcess = null;
   }
 }
