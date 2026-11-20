@@ -20,7 +20,6 @@ import {
   transcribeWithWhisper as transcribeWithLocalWhisper,
   type AccuracyTier,
   type WhisperResult,
-  type WhisperWord,
 } from "./whisper";
 import { transcribeWithSarvam, isSarvamLanguage } from "./sarvam";
 import { transcribeWithGroq } from "./groq";
@@ -85,7 +84,7 @@ export async function transcribe(req: TranscribeRequest): Promise<TranscribeResu
   for (const provider of order) {
     try {
       console.log(`[transcribe] trying provider=${provider}`);
-      const raw = collapseRepetitionLoops(await callProvider(provider, req), provider);
+      const raw = await callProvider(provider, req);
       const repaired = repairTimestamps(raw, provider);
       const finalised = await applyRomanizationIfNeeded(repaired, req, provider);
       // Final safety pass — runs whether the LLM polish step inside
@@ -200,75 +199,6 @@ async function callProvider(
         accuracy: req.accuracy,
       });
   }
-}
-
-/**
- * Whisper-family decoders (faster-whisper, Groq, local Whisper) can fall
- * into a repetition loop — "accha accha accha accha…" or the same 3-word
- * phrase five times over — usually across music, silence or a noisy
- * stretch. Each looped word arrives with its own timestamp, so captions
- * show the phantom repeats and hold them on screen across the gap.
- *
- * Collapse any run where the same 1-word unit repeats 4+ times in a row,
- * or the same 2–6-word phrase repeats 3+ times, down to its FIRST
- * occurrence (keeping that occurrence's real timing). The thresholds are
- * deliberately above normal speech — "haan haan", "bye bye bye",
- * "nahi nahi nahi" survive untouched.
- */
-function collapseRepetitionLoops(
-  raw: WhisperResult,
-  provider: TranscribeProvider
-): WhisperResult {
-  const words = raw.words;
-  if (words.length < 4) return raw;
-  const norm = words.map((w) =>
-    w.word.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "")
-  );
-  const MAX_N = 6;
-
-  const kept: WhisperWord[] = [];
-  let dropped = 0;
-  let i = 0;
-  while (i < words.length) {
-    let bestN = 0;
-    let bestRepeats = 1;
-    for (let n = 1; n <= MAX_N && i + n * 2 <= words.length; n++) {
-      // A unit made only of punctuation/empty tokens isn't a "word loop".
-      if (norm.slice(i, i + n).every((t) => t === "")) continue;
-      let repeats = 1;
-      while (i + (repeats + 1) * n <= words.length) {
-        let same = true;
-        for (let k = 0; k < n; k++) {
-          if (norm[i + repeats * n + k] !== norm[i + k]) { same = false; break; }
-        }
-        if (!same) break;
-        repeats++;
-      }
-      const threshold = n === 1 ? 4 : 3;
-      if (repeats >= threshold && repeats * n > bestRepeats * bestN) {
-        bestN = n;
-        bestRepeats = repeats;
-      }
-    }
-    if (bestN > 0) {
-      kept.push(...words.slice(i, i + bestN));
-      dropped += (bestRepeats - 1) * bestN;
-      i += bestRepeats * bestN;
-    } else {
-      kept.push(words[i]);
-      i++;
-    }
-  }
-
-  if (dropped === 0) return raw;
-  console.log(
-    `[transcribe] provider=${provider} collapsed ${dropped} repeated word(s) from a decoder repetition loop`
-  );
-  return {
-    ...raw,
-    words: kept,
-    text: kept.map((w) => w.word).join(" ").replace(/\s+/g, " ").trim(),
-  };
 }
 
 /**
