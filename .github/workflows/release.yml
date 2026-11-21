@@ -41,7 +41,34 @@ permissions:
   contents: write
 
 jobs:
+  # Create ONE draft release for the tag before any platform builds.
+  # Without this, each matrix job's electron-builder looked for the
+  # release, found none, and created its own — when the Windows and Mac
+  # jobs finished in the same second (v1.0.81) GitHub ended up with two
+  # "v1.0.81" releases, Mac assets on one and Windows on the other.
+  # electron-updater resolves /releases/download/<tag>/latest-mac.yml
+  # against just one of them, got a 404, and Macs never saw the update.
+  # With a draft already present, every job uploads into it instead.
+  create-release:
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists — reusing it"
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft \
+              --title "${TAG#v}" --notes "" --verify-tag
+          fi
+
   release:
+    needs: create-release
+    # Still runs for workflow_dispatch (where create-release is skipped).
+    if: ${{ !failure() && !cancelled() }}
     strategy:
       fail-fast: false
       matrix:
@@ -385,3 +412,18 @@ jobs:
         run: |
           npm run build:electron
           npx electron-builder --publish always --config electron-builder.config.js
+
+  # Publish the draft once the platform builds are done. `always()` so a
+  # failing Linux job doesn't hold back the Windows and Mac updates; the
+  # updater only looks at published releases, so nobody is offered the
+  # version until every platform that succeeded has uploaded.
+  publish-release:
+    needs: [create-release, release]
+    if: ${{ always() && needs.create-release.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
